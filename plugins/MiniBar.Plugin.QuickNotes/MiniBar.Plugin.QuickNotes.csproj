@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>MiniBar.Plugin.QuickNotes</AssemblyName>
+    <RootNamespace>MiniBar.Plugin.QuickNotes</RootNamespace>
+    <Version>1.0.0</Version>
+    <OutDir>..\..\src\MiniBar.App\bin\$(Configuration)\Plugins\</OutDir>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MiniBar.Sdk\MiniBar.Sdk.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,14 @@
+# 归一化换行：仓库内存 LF，检出时按平台决定
+* text=auto
+
+*.cs      text diff=csharp
+*.xaml    text
+*.csproj  text
+*.props   text
+*.manifest text
+*.json    text
+*.md      text
+*.sln     text eol=crlf
+
+*.png     binary
+*.ico     binary

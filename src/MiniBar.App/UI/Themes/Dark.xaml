@@ -1,0 +1,25 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- 深色主题。键名与 Light.xaml 完全一致，ThemeService 整本替换即可完成换肤。 -->
+
+    <SolidColorBrush x:Key="BarBackgroundBrush" Color="#F21C1C1E" />
+    <SolidColorBrush x:Key="BarBorderBrush" Color="#26FFFFFF" />
+    <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#F5222226" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#1AFFFFFF" />
+    <SolidColorBrush x:Key="SurfaceStrongBrush" Color="#26FFFFFF" />
+    <SolidColorBrush x:Key="ForegroundBrush" Color="#FFF2F2F5" />
+    <SolidColorBrush x:Key="MutedForegroundBrush" Color="#FF9A9AA5" />
+    <SolidColorBrush x:Key="BorderBrush" Color="#26FFFFFF" />
+    <SolidColorBrush x:Key="SeparatorBrush" Color="#1FFFFFFF" />
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF64A8FF" />
+    <SolidColorBrush x:Key="AccentForegroundBrush" Color="#FF0B0B0F" />
+    <SolidColorBrush x:Key="HoverBrush" Color="#1FFFFFFF" />
+    <SolidColorBrush x:Key="ActiveBrush" Color="#38FFFFFF" />
+    <SolidColorBrush x:Key="BadgeBrush" Color="#33FFFFFF" />
+    <SolidColorBrush x:Key="MenuBackgroundBrush" Color="#FA26262B" />
+    <SolidColorBrush x:Key="ShadowBrush" Color="#66000000" />
+    <SolidColorBrush x:Key="DangerBrush" Color="#FFFF6B60" />
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#40FFFFFF" />
+
+</ResourceDictionary>

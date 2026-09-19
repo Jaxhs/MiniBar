@@ -1,0 +1,13 @@
+<Application x:Class="MiniBar.App.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- 主题色字典（Light/Dark）由 ThemeService 在启动时插入到索引 0 -->
+                <ResourceDictionary Source="UI/Themes/Shared.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+</Application>

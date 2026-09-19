@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>MiniBar.Sdk</AssemblyName>
+    <RootNamespace>MiniBar.Sdk</RootNamespace>
+    <Version>1.0.0</Version>
+    <Description>MiniBar 空壳宿主与插件之间的唯一契约。宿主与插件均引用本程序集，且必须由默认 AssemblyLoadContext 加载以保证类型标识一致。</Description>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

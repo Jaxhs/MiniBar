@@ -1,0 +1,186 @@
+<Window x:Class="MiniBar.App.UI.BarWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:hosting="clr-namespace:MiniBar.App.Hosting"
+        xmlns:ui="clr-namespace:MiniBar.App.UI"
+        Title="MiniBar"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        SizeToContent="WidthAndHeight"
+        ResizeMode="NoResize"
+        ShowActivated="False"
+        AllowDrop="True"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        FontFamily="Microsoft YaHei UI, Segoe UI"
+        FontSize="13"
+        Opacity="0"
+        TextOptions.TextFormattingMode="Display">
+
+    <Window.Resources>
+
+        <!-- 任务栏上的一个“任务图标”。插件若提供 B 内嵌内容，则直接用内容替换图标区。 -->
+        <DataTemplate x:Key="BarItemTemplate" DataType="{x:Type hosting:PluginDescriptor}">
+            <Border x:Name="ItemRoot"
+                    MinWidth="38"
+                    MaxWidth="320"
+                    Height="38"
+                    Margin="2,0"
+                    CornerRadius="9"
+                    Background="Transparent"
+                    Cursor="Hand"
+                    AllowDrop="True"
+                    ToolTip="{Binding HoverText}"
+                    ToolTipService.InitialShowDelay="450">
+                <Grid>
+                    <ContentControl x:Name="WidgetHost"
+                                    Tag="Interactive"
+                                    Visibility="Collapsed"
+                                    HorizontalContentAlignment="Stretch"
+                                    VerticalContentAlignment="Center" />
+
+                    <StackPanel x:Name="IconArea"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Margin="9,0">
+                        <ContentControl Content="{Binding Icon}"
+                                        ContentTemplate="{StaticResource PluginIconTemplate}"
+                                        VerticalAlignment="Center" />
+                        <TextBlock x:Name="ItemLabel"
+                                   Text="{Binding DisplayName}"
+                                   Margin="6,0,2,0"
+                                   VerticalAlignment="Center"
+                                   Visibility="{Binding DataContext.ShowLabels, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
+                    </StackPanel>
+
+                    <Border x:Name="BadgePill"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Top"
+                            Margin="0,2,2,0"
+                            MinWidth="15"
+                            Height="15"
+                            CornerRadius="7.5"
+                            Padding="4,0"
+                            Background="{DynamicResource BadgeBrush}"
+                            Visibility="Collapsed">
+                        <TextBlock x:Name="BadgeText"
+                                   Text="{Binding Badge}"
+                                   FontSize="10"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Foreground="{DynamicResource ForegroundBrush}" />
+                    </Border>
+
+                    <Border x:Name="ActiveBar"
+                            Height="3"
+                            Width="16"
+                            CornerRadius="1.5"
+                            Background="{DynamicResource AccentBrush}"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Bottom"
+                            Margin="0,0,0,1"
+                            Visibility="Collapsed" />
+                </Grid>
+            </Border>
+
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasBarWidget}" Value="True">
+                    <Setter TargetName="WidgetHost" Property="Visibility" Value="Visible" />
+                    <Setter TargetName="IconArea" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasBadge}" Value="True">
+                    <Setter TargetName="BadgePill" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding BadgeIsAccent}" Value="True">
+                    <Setter TargetName="BadgePill" Property="Background" Value="{DynamicResource AccentBrush}" />
+                    <Setter TargetName="BadgeText" Property="Foreground" Value="{DynamicResource AccentForegroundBrush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsPanelOpen}" Value="True">
+                    <Setter TargetName="ItemRoot" Property="Background" Value="{DynamicResource ActiveBrush}" />
+                    <Setter TargetName="ActiveBar" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasError}" Value="True">
+                    <Setter TargetName="ItemRoot" Property="Opacity" Value="0.55" />
+                </DataTrigger>
+                <Trigger SourceName="ItemRoot" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="ItemRoot" Property="Background" Value="{DynamicResource HoverBrush}" />
+                </Trigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+
+    </Window.Resources>
+
+    <Border x:Name="ShellBorder"
+            Margin="7"
+            Padding="4"
+            CornerRadius="14"
+            AllowDrop="True"
+            Background="{DynamicResource BarBackgroundBrush}"
+            BorderBrush="{DynamicResource BarBorderBrush}"
+            BorderThickness="1">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="12" ShadowDepth="1" Direction="270" Opacity="0.20" Color="#FF000000" />
+        </Border.Effect>
+
+        <DockPanel>
+
+            <!-- 左侧：宿主菜单把手 -->
+            <Button x:Name="GripButton"
+                    DockPanel.Dock="Left"
+                    Style="{StaticResource IconButtonStyle}"
+                    Click="OnGripClick"
+                    ToolTip="MiniBar 菜单">
+                <TextBlock Text="{Binding GripGlyph}"
+                           FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                           FontSize="15" />
+            </Button>
+
+            <!-- 右侧：溢出插件 + 插件管理 -->
+            <StackPanel x:Name="RightTools"
+                        DockPanel.Dock="Right"
+                        Orientation="Horizontal"
+                        VerticalAlignment="Center">
+                <Button x:Name="OverflowButton"
+                        Style="{StaticResource IconButtonStyle}"
+                        Click="OnOverflowClick"
+                        Visibility="{Binding HasOverflow, Converter={StaticResource BoolToVisibility}}"
+                        ToolTip="未固定的插件">
+                    <TextBlock Text="&#xE712;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" />
+                </Button>
+                <Button x:Name="AddButton"
+                        Style="{StaticResource IconButtonStyle}"
+                        Click="OnAddClick"
+                        ToolTip="插件管理（也可以直接把插件 DLL 拖到任务栏上）">
+                    <TextBlock Text="&#xE710;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="15" />
+                </Button>
+            </StackPanel>
+
+            <!-- 中间：固定插件的任务图标 -->
+            <Grid>
+                <ItemsControl x:Name="ItemsHost"
+                              ItemsSource="{Binding PinnedItems}"
+                              ItemTemplate="{StaticResource BarItemTemplate}"
+                              VerticalAlignment="Center">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="{Binding ItemsOrientation}" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+
+                <TextBlock x:Name="EmptyHint"
+                           Text="把插件 DLL 拖到这里"
+                           Margin="8,0"
+                           FontSize="12"
+                           VerticalAlignment="Center"
+                           Foreground="{DynamicResource MutedForegroundBrush}"
+                           Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />
+            </Grid>
+
+        </DockPanel>
+    </Border>
+</Window>

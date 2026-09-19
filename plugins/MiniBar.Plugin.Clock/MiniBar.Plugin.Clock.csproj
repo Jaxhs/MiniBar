@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>MiniBar.Plugin.Clock</AssemblyName>
+    <RootNamespace>MiniBar.Plugin.Clock</RootNamespace>
+    <Version>1.0.0</Version>
+    <!-- 直接编译进宿主的插件目录，这样 F5 启动宿主就能看到它 -->
+    <OutDir>..\..\src\MiniBar.App\bin\$(Configuration)\Plugins\</OutDir>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Private=false：契约由宿主提供，插件目录里不要出现 MiniBar.Sdk.dll 的副本，
+         否则插件的 ALC 会加载到另一份契约程序集，类型标识就对不上了。 -->
+    <ProjectReference Include="..\..\src\MiniBar.Sdk\MiniBar.Sdk.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>
