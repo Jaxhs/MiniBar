@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using MiniBar.App.Interop;
 using MiniBar.Sdk;
 
 namespace MiniBar.App.UI;
@@ -58,6 +60,38 @@ public static class MenuBuilder
 
     /// <summary>生成一条分隔线(Separator)。菜单项之间用来分组。</summary>
     public static Separator Sep() => new();
+
+    /// <summary>单独造一个菜单图标（给子菜单标题用），避免"造一个假菜单项再偷它图标"的写法。</summary>
+    public static FrameworkElement Icon(string glyph) => BuildIcon(PluginIcon.Parse(glyph));
+
+    /// <summary>
+    /// 把菜单弹到<b>鼠标当前位置</b>。
+    ///
+    /// <para><b>为什么不用 PlacementMode.Bottom + PlacementTarget：</b>那会把菜单钉在窗口的某条边
+    /// （例如全宽 AppBar 窗口的正下方、或贴住它的下边），而用户右键是在"某个位置"点的，
+    /// 菜单却跑到固定位置 —— 体验很奇怪。这里改用"绝对屏幕坐标"直接落在光标处。</para>
+    ///
+    /// <para>GetCursorPositionPixels 返回物理像素，而 WPF 的偏移量单位是 DIP，
+    /// 所以要除以缩放比（125% 缩放下不改会越偏越远）。</para>
+    /// </summary>
+    public static void ShowAtCursor(ContextMenu menu, double dpiScale)
+    {
+        // 坐标单位说明（做过标定实验：偏移 (100,100) 时菜单左上角落在物理像素 (135,145)）：
+        // WPF Popup 在 AbsolutePoint 模式下的 HorizontalOffset/VerticalOffset
+        // 以【DIP】为单位，WPF 会自己乘以 DPI 换算成物理像素（135 ≈ 100 × 1.25 + 阴影留白）。
+        // 所以这里要把 GetCursorPositionPixels 的物理像素【除以缩放比】换成 DIP 再传入。
+        //
+        // 顺带记录另外两种写法为什么不行：
+        //   · Placement=Bottom + 窗口做目标：菜单钉在窗口下沿的固定位置，不跟鼠标；
+        //   · Placement=MousePoint / RelativePoint：PerMonitorV2 缩放下会整体偏左。
+        var cursor = DisplayService.GetCursorPositionPixels();
+        var scale = dpiScale > 0 ? dpiScale : 1.0;
+
+        menu.Placement = PlacementMode.AbsolutePoint;
+        menu.HorizontalOffset = cursor.X / scale;
+        menu.VerticalOffset = cursor.Y / scale;
+        menu.IsOpen = true;
+    }
 
     /// <summary>
     /// 把插件返回的一整组 PluginMenuEntry 转成 WPF 菜单对象(IEnumerable&lt;object&gt;，元素是 MenuItem/Separator)。

@@ -77,6 +77,7 @@ public partial class BarWindow : Window
         {
             ReleaseAllWidgets();
             AppBar.Dispose(); // 退出前注销 AppBar，把屏幕空间还给系统
+            Tray.Dispose();   // 移除系统托盘图标
         };
 
         _plugins.LayoutChanged += (_, _) => Dispatcher.BeginInvoke(new Action(SyncPlugins));
@@ -102,6 +103,9 @@ public partial class BarWindow : Window
 
     /// <summary>AppBar 注册器：注册后本窗口就"像任务栏一样"占住一条屏幕边缘。</summary>
     public AppBarService AppBar { get; } = new();
+
+    /// <summary>系统托盘图标：左键显示/隐藏任务栏、右键菜单、双击打开设置。</summary>
+    public TrayIcon Tray { get; } = new();
 
     // HwndSource：WPF 里“把托管窗口接到 Win32 原生消息循环”的桥。
     // 通过它我们能挂钩子接收原生窗口消息（AppBar 回调、分辨率/缩放变化等）。
@@ -158,6 +162,28 @@ public partial class BarWindow : Window
         AppBar.Attach(hwnd);
         AppBar.PositionChanged += (_, _) => OnAppBarPositionChanged();
         AppBar.FullscreenAppChanged += (_, started) => AppServices.Fullscreen?.ReportSystemFullscreen(started);
+
+        // 系统托盘图标：也挂在本窗口名下（由 OnWndProc 转交鼠标消息），按设置决定显隐
+        Tray.Attach(hwnd);
+        ApplyTrayVisibility();
+    }
+
+    /// <summary>
+    /// 让系统托盘图标的显隐跟随设置。窗口显示且设置开启就 Show，否则 Hide。
+    /// 设置里开关托盘、启动、退出时都会走到这里（幂等）。
+    /// </summary>
+    public void ApplyTrayVisibility()
+    {
+        var want = _settings.Settings.EnableTrayIcon && !_shell.IsMiniMode;
+
+        if (want && !Tray.IsVisible)
+        {
+            Tray.Show($"MiniBar · {_settings.Settings.Edge} 边");
+        }
+        else if (!want && Tray.IsVisible)
+        {
+            Tray.Hide();
+        }
     }
 
     /// <summary>
@@ -193,6 +219,15 @@ public partial class BarWindow : Window
         if (AppBar.HandleMessage(msg, wParam, lParam))
         {
             handled = true;
+            return IntPtr.Zero;
+        }
+
+        // 系统托盘图标发来的鼠标消息：由 OnTrayMessage 按左键/右键/双击分流
+        if (msg == TrayIcon.CallbackMessage)
+        {
+            handled = true;
+            var mouseMessage = (int)(lParam.ToInt64() & 0xFFFF);
+            Dispatcher.BeginInvoke(new Action(() => OnTrayMessage(mouseMessage)));
             return IntPtr.Zero;
         }
 
@@ -350,30 +385,36 @@ public partial class BarWindow : Window
             if (granted is { Width: > 0, Height: > 0 })
             {
                 // 长度交给系统批的矩形，厚度用设置值；只在真的不同的时候改，
-                // 否则会触发 SizeChanged → Reposition 的死循环
+                // 否则会触发 SizeChanged → Reposition 的死循环。
+                // 注意 NaN 的坑：ApplySettings 在 AppBar 模式下会把长度方向设成 NaN（= 由内容决定），
+                // 而 "NaN - x > 0.5" 恒为 false，如果不显式处理 NaN，宽度就永远不会被赋值，
+                // 任务栏就会停在内容宽度（几百像素）而不是铺满整条边。
                 var wantsWidth = granted.Value.Width / scale;
                 var wantsHeight = granted.Value.Height / scale;
 
+                var widthDiff = double.IsNaN(Width) ? double.MaxValue : Math.Abs(Width - wantsWidth);
+                var heightDiff = double.IsNaN(Height) ? double.MaxValue : Math.Abs(Height - wantsHeight);
+
                 if (_vm.IsVertical)
                 {
-                    if (!double.IsNaN(Width) && Math.Abs(Width - wantsWidth) > 0.5)
+                    if (widthDiff > 0.5)
                     {
                         Width = wantsWidth;
                     }
 
-                    if (Math.Abs(Height - wantsHeight) > 0.5)
+                    if (heightDiff > 0.5)
                     {
                         Height = wantsHeight;
                     }
                 }
                 else
                 {
-                    if (!double.IsNaN(Height) && Math.Abs(Height - wantsHeight) > 0.5)
+                    if (heightDiff > 0.5)
                     {
                         Height = wantsHeight;
                     }
 
-                    if (Math.Abs(Width - wantsWidth) > 0.5)
+                    if (widthDiff > 0.5)
                     {
                         Width = wantsWidth;
                     }
@@ -970,189 +1011,44 @@ public partial class BarWindow : Window
 
     // ================================================================ 右键菜单
 
-    /// <summary>
-    /// 弹出任务栏主菜单（右键空白处/点把手时调用）。菜单在 BuildMainContextMenu 里拼装，
-    /// 然后用 PlacementMode.Bottom 贴着本窗口显示。
-    /// </summary>
+    /// <summary>弹出主菜单（任务栏右键 / 把手 / 托盘右键都走这里）。菜单会出现在鼠标位置。</summary>
     public void ShowMainContextMenu()
     {
-        var menu = BuildMainContextMenu();
+        var menu = MainMenuBuilder.Build(_plugins, _settings, _shell, this);
+
+        // 定位（最后一次实验的结论，采用 Point + 相对任务栏边框的鼠标坐标）：
+        //   · Bottom/窗口做目标：钉在固定位置，不跟鼠标；
+        //   · MousePoint / RelativePoint / AbsolutePoint：PerMonitorV2 缩放下全部偏（右缘对齐鼠标）；
+        //   · Point + PlacementTarget=ShellBorder + Mouse.GetPosition(ShellBorder)：交给 WPF 换算 DPI。
+        // 提示：Windows 的「菜单对齐方式」（MenuDropAlignment，常见于平板/左手模式）若为 true，
+        // 所有右键菜单都会弹在鼠标左侧（右缘贴鼠标）—— 这是系统级设置，不是本程序的定位错误。
+
         menu.PlacementTarget = this;
-        menu.Placement = PlacementMode.Bottom;
-        menu.IsOpen = true;
+        menu.Placement = PlacementMode.MousePoint;
     }
 
     /// <summary>
-    /// 拼装任务栏主菜单的全部项：设置、插件管理、迷你模式开关、主题、停靠边、文字标签、
-    /// 插件追加的菜单项（PluginMenuTarget.BarBackground）、打开目录、退出等。
-    /// 这里大量用 MenuBuilder.Item(...) 统一构造外观一致的菜单项；复选项(isCheckable)反映当前设置值。
-    /// 改动设置后调用 _settings.NotifyChanged() 通知保存、必要时 _shell.ApplySettings() 立即生效。
+    /// 托盘图标发来的鼠标消息分流：
+    ///   左键单击 → 显示/隐藏任务栏；双击 → 打开设置；右键/菜单键 → 弹主菜单。
+    /// 注意：回调可能来自非 UI 线程，所以这里抛回 UI 线程再执行。
     /// </summary>
-    private ContextMenu BuildMainContextMenu()
+    private void OnTrayMessage(int mouseMessage)
     {
-        var settings = _settings.Settings;
-        var menu = new ContextMenu { Style = (Style)FindResource("MiniBarContextMenuStyle") };
-
-        menu.Items.Add(MenuBuilder.Item("设置…", () => _shell.ShowSettings(), "glyph:E713", hint: "Ctrl+Alt+S"));
-        menu.Items.Add(MenuBuilder.Item("插件管理…", () => _shell.ShowPluginManager(), "glyph:E8FD"));
-
-        menu.Items.Add(MenuBuilder.Sep());
-
-        var compactPlugins = _plugins.Plugins
-            .Where(p => p.IsEnabled && p.IsLoaded && p.HasCompact)
-            .ToList();
-
-        var miniItem = MenuBuilder.Item(
-            _shell.IsMiniMode ? "退出迷你模式" : "进入迷你模式",
-            () =>
-            {
-                if (_shell.IsMiniMode)
-                {
-                    _shell.ExitMiniMode();
-                }
-                else
-                {
-                    _shell.EnterMiniMode(string.Empty);
-                }
-            },
-            "glyph:E9A7",
-            hint: "全屏程序出现时自动进入",
-            isEnabled: compactPlugins.Count > 0 || _shell.IsMiniMode,
-            isChecked: _shell.IsMiniMode);
-
-        menu.Items.Add(miniItem);
-
-        if (compactPlugins.Count > 0)
+        switch (mouseMessage)
         {
-            var sourceMenu = new MenuItem
-            {
-                Header = "迷你模式显示内容",
-                Style = (Style)FindResource("MiniBarMenuItemStyle"),
-                Icon = MenuBuilder.Item("x", null).Icon,
-            };
+            case TrayIcon.WM_LBUTTONUP:
+                SetBarVisible(!IsVisible);
+                break;
 
-            var current = _shell.ResolveMiniPlugin();
-            foreach (var descriptor in compactPlugins)
-            {
-                var captured = descriptor;
-                sourceMenu.Items.Add(MenuBuilder.Item(
-                    descriptor.DisplayName,
-                    () => _shell.SetMiniModePlugin(captured.Id),
-                    isChecked: ReferenceEquals(current, descriptor),
-                    isCheckable: true));
-            }
+            case TrayIcon.WM_LBUTTONDBLCLK:
+                _shell.ShowSettings();
+                break;
 
-            menu.Items.Add(sourceMenu);
+            case TrayIcon.WM_RBUTTONUP:
+            case TrayIcon.WM_CONTEXTMENU:
+                ShowMainContextMenu();
+                break;
         }
-
-        menu.Items.Add(MenuBuilder.Item("自动进入迷你模式（检测到全屏时）",
-            () =>
-            {
-                settings.AutoEnterMiniMode = !settings.AutoEnterMiniMode;
-                _settings.NotifyChanged();
-                _shell.ApplySettings();
-            },
-            hint: null, isChecked: settings.AutoEnterMiniMode, isCheckable: true));
-
-        menu.Items.Add(MenuBuilder.Item("全屏时彻底隐藏任务栏",
-            () =>
-            {
-                settings.HideBarWhenFullscreen = !settings.HideBarWhenFullscreen;
-                _settings.NotifyChanged();
-            },
-            isChecked: settings.HideBarWhenFullscreen, isCheckable: true));
-
-        menu.Items.Add(MenuBuilder.Sep());
-
-        // 任务栏位置
-        var edgeMenu = new MenuItem
-        {
-            Header = "任务栏位置",
-            Style = (Style)FindResource("MiniBarMenuItemStyle"),
-        };
-        foreach (var (edge, label, glyph) in new[]
-                 {
-                     (DockEdge.Bottom, "底部", "glyph:E74B"),
-                     (DockEdge.Top, "顶部", "glyph:E74A"),
-                     (DockEdge.Left, "左侧", "glyph:E76B"),
-                     (DockEdge.Right, "右侧", "glyph:E76C"),
-                 })
-        {
-            var captured = edge;
-            edgeMenu.Items.Add(MenuBuilder.Item(label,
-                () =>
-                {
-                    settings.Edge = captured;
-                    _settings.NotifyChanged();
-                    _shell.ApplySettings();
-                },
-                glyph, isChecked: settings.Edge == edge, isCheckable: true));
-        }
-
-        menu.Items.Add(edgeMenu);
-
-        var themeMenu = new MenuItem
-        {
-            Header = "主题",
-            Style = (Style)FindResource("MiniBarMenuItemStyle"),
-        };
-        foreach (var (name, label) in new[] { ("Light", "浅色"), ("Dark", "深色"), ("System", "跟随系统") })
-        {
-            var captured = name;
-            themeMenu.Items.Add(MenuBuilder.Item(label,
-                () =>
-                {
-                    settings.Theme = captured;
-                    _settings.NotifyChanged();
-                    AppServices.Theme.Apply(captured);
-                    _shell.OnThemeChanged();
-                },
-                isChecked: string.Equals(settings.Theme, name, StringComparison.OrdinalIgnoreCase),
-                isCheckable: true));
-        }
-
-        menu.Items.Add(themeMenu);
-
-        menu.Items.Add(MenuBuilder.Item("显示插件文字标签",
-            () =>
-            {
-                settings.ShowItemLabels = !settings.ShowItemLabels;
-                _settings.NotifyChanged();
-                _shell.ApplySettings();
-            },
-            isChecked: settings.ShowItemLabels, isCheckable: true));
-
-        menu.Items.Add(MenuBuilder.Item("空闲时释放内存",
-            () =>
-            {
-                settings.TrimWorkingSetOnIdle = !settings.TrimWorkingSetOnIdle;
-                _settings.NotifyChanged();
-            },
-            hint: "把未使用内存还给系统",
-            isChecked: settings.TrimWorkingSetOnIdle, isCheckable: true));
-
-        menu.Items.Add(MenuBuilder.Sep());
-
-        // 插件追加的菜单项（位置 = 任务栏空白处）
-        var pluginEntries = _shell.CollectMenuEntries(PluginMenuTarget.BarBackground, null);
-        if (pluginEntries.Count > 0)
-        {
-            foreach (var item in MenuBuilder.Convert(pluginEntries, _shell.InvokeMenuEntry))
-            {
-                menu.Items.Add(item);
-            }
-
-            menu.Items.Add(MenuBuilder.Sep());
-        }
-
-        menu.Items.Add(MenuBuilder.Item("打开插件目录", () => OpenInExplorer(AppPaths.UserPluginDirectory), "glyph:E838"));
-        menu.Items.Add(MenuBuilder.Item("打开配置目录", () => OpenInExplorer(AppPaths.ConfigDirectory), "glyph:E8A5"));
-        menu.Items.Add(MenuBuilder.Item("查看日志", () => OpenInExplorer(AppPaths.LogFile), "glyph:E9D9"));
-
-        menu.Items.Add(MenuBuilder.Sep());
-        menu.Items.Add(MenuBuilder.Item("退出 MiniBar", () => Application.Current.Shutdown(), "glyph:E7E8"));
-
-        return menu;
     }
 
     /// <summary>

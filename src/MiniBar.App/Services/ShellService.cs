@@ -455,6 +455,21 @@ public sealed class ShellService : IShellService, IDisposable
     /// <summary>设置窗口里"插件管理"页的伪插件 ID（不会与真实插件 ID 冲突）。</summary>
     internal const string PluginManagerPage = "minibar.page.plugins";
 
+    /// <summary>
+    /// 让系统托盘图标的显隐跟随设置，并在刚开启时用气泡提示一次用法。
+    /// 设置里开关托盘、启动时都会走到这里。
+    /// </summary>
+    public void ApplyTrayIconSetting()
+    {
+        _bar?.ApplyTrayVisibility();
+
+        if (_settings.Settings.EnableTrayIcon)
+        {
+            _bar?.Tray.ShowBalloon("MiniBar 托盘图标已启用",
+                "左键：显示/隐藏任务栏 · 右键：菜单 · 双击：打开设置");
+        }
+    }
+
     /// <summary>打开设置窗口（宿主设置 + 所有插件的设置）。</summary>
     public void ShowSettings(string pluginId = "")
     {

@@ -47,6 +47,12 @@ public sealed class AppSettings
     /// </summary>
     public bool AutoHideSystemTaskbar { get; set; }
 
+    /// <summary>
+    /// 是否显示系统托盘（通知区域）图标。
+    /// 交互：左键单击显示/隐藏任务栏、右键弹主菜单、双击打开设置。
+    /// </summary>
+    public bool EnableTrayIcon { get; set; } = true;
+
     public double BarOpacity { get; set; } = 0.94;
 
     public string Theme { get; set; } = "Light";

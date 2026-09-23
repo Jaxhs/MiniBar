@@ -5,6 +5,8 @@
     <AssemblyName>MiniBar</AssemblyName>
     <RootNamespace>MiniBar.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- 程序图标：既让 exe/资源管理器里好看，托盘图标也从这里提取（见 Interop/TrayIcon.cs） -->
+    <ApplicationIcon>Assets\MiniBar.ico</ApplicationIcon>
     <!-- 低内存取向：单线程服务器 GC 关闭、并发 GC 关闭、不做 ReadyToRun 之外的裁剪 -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>

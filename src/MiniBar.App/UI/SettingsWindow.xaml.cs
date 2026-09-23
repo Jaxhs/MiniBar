@@ -65,6 +65,9 @@ public partial class SettingsWindow : Window
     private readonly HostSettingsProvider _hostSettings;
     private readonly List<NavItem> _nav = new();
 
+    /// <summary>从插件管理页"钻进去"的插件（null = 还在插件管理列表那一层）。</summary>
+    private PluginDescriptor? _drilledPlugin;
+
     private bool _rendering;
     private bool _rebuildQueued;
 
@@ -94,37 +97,44 @@ public partial class SettingsWindow : Window
     private void OnPluginsChanged(object? sender, EventArgs e) =>
         Dispatcher.BeginInvoke(new Action(BuildNav));
 
-    /// <summary>从插件管理器跳过来时直接定位到某个插件（或插件管理页）。</summary>
+    /// <summary>
+    /// 从外部跳转到某个插件（或插件管理页）。现在导航只有两级（宿主设置 / 插件管理），
+    /// 所以"打开某插件的设置"= 先选中插件管理页，再钻进去显示该插件的详情。
+    /// </summary>
     public void SelectPlugin(string pluginId)
     {
+        // 先把导航切到插件管理页
+        var manager = _nav.FirstOrDefault(n => n.IsManagerPage);
+        if (manager is not null)
+        {
+            NavList.SelectedItem = manager;
+        }
+
         if (string.Equals(pluginId, ShellService.PluginManagerPage, StringComparison.OrdinalIgnoreCase))
         {
-            var manager = _nav.FirstOrDefault(n => n.IsManagerPage);
-
-            if (manager is not null)
-            {
-                NavList.SelectedItem = manager;
-            }
-
+            _drilledPlugin = null;
             return;
         }
 
-        var target = _nav.FirstOrDefault(n =>
-            n.Descriptor is not null && string.Equals(n.Descriptor.Id, pluginId, StringComparison.OrdinalIgnoreCase));
-
-        if (target is not null)
+        var target = _plugins.Find(pluginId);
+        if (target is not null && !target.IsDuplicate)
         {
-            NavList.SelectedItem = target;
+            _drilledPlugin = target;
         }
+
+        Render();
     }
 
     // ---------------------------------------------------------------- 导航
 
-    /// <summary>重建左侧导航：宿主设置 → 插件管理 → 每个插件（按用户在任务栏上排的顺序）。</summary>
+    /// <summary>
+    /// 重建左侧导航。现在只有两项：宿主设置、插件管理（用户要求"插件管理和宿主设置放同一层级，
+    /// 其余插件全部放进插件管理器"）。插件的详情页通过插件管理页里的"设置"按钮钻进去。
+    /// </summary>
     private void BuildNav()
     {
-        var selectedId = (NavList.SelectedItem as NavItem)?.Descriptor?.Id;
-        var wasHost = NavList.SelectedItem is NavItem { Descriptor: null };
+        // 记住当前停在哪一页，重建后尽量恢复
+        var wasManager = NavList.SelectedItem is NavItem { IsManagerPage: true };
 
         _nav.Clear();
         _nav.Add(new NavItem
@@ -143,25 +153,21 @@ public partial class SettingsWindow : Window
             IsManagerPage = true,
         });
 
-        foreach (var descriptor in _plugins.Plugins.Where(p => !p.IsDuplicate).OrderBy(p => p.Order))
+        // 插件被删除时，如果正停在它的详情页上，就退回插件管理列表
+        if (_drilledPlugin is not null && _plugins.Find(_drilledPlugin.Id) is null)
         {
-            _nav.Add(new NavItem
-            {
-                Title = descriptor.DisplayName,
-                Subtitle = descriptor.HasSettings ? descriptor.Id : $"{descriptor.Id}（无设置项）",
-                Icon = descriptor.Icon,
-                Descriptor = descriptor,
-            });
+            _drilledPlugin = null;
         }
 
         NavList.ItemsSource = null;
         NavList.ItemsSource = _nav;
 
-        if (selectedId is not null)
+        // 重建后恢复之前停的位置：优先保留插件管理页，否则回到宿主设置
+        if (wasManager)
         {
-            SelectPlugin(selectedId);
+            NavList.SelectedItem = _nav.First(n => n.IsManagerPage);
         }
-        else if (wasHost || NavList.SelectedItem is null)
+        else if (NavList.SelectedItem is null)
         {
             NavList.SelectedIndex = 0;
         }
@@ -196,7 +202,17 @@ public partial class SettingsWindow : Window
 
             if (item.IsManagerPage)
             {
-                RenderPluginManager();
+                // 插件管理页有两种呈现：列表（默认）或某个插件的详情（从列表点"设置"钻进来）
+                if (_drilledPlugin is not null)
+                {
+                    AddBackButton();
+                    RenderPlugin(_drilledPlugin);
+                }
+                else
+                {
+                    RenderPluginManager();
+                }
+
                 return;
             }
 
@@ -228,9 +244,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>改完设置后重建当前页（避免读到旧值），排队到当前事件之后执行。</summary>
-    /// <summary>
-    /// 改完设置后重建当前页（否则读到的是旧值）。
+    /// <summary>改完设置后重建当前页（否则读到的是旧值）。
     /// <para>排队到当前事件之后执行：如果直接在 ComboBox 的 SelectionChanged 里重建界面，
     /// 会把正在处理事件的那个控件从树上摘掉，容易出怪问题。</para>
     /// </summary>
@@ -248,6 +262,28 @@ public partial class SettingsWindow : Window
             _rebuildQueued = false;
             Render();
         }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>在插件详情页顶部放一个"返回插件管理"按钮（因为插件页是从插件管理钻进来的）。</summary>
+    private void AddBackButton()
+    {
+        var back = new Button
+        {
+            Content = "←  返回插件管理",
+            Style = (Style)FindResource("PanelButtonStyle"),
+            Padding = new Thickness(10, 5, 10, 5),
+            FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 0, 0, 12),
+        };
+
+        back.Click += (_, _) =>
+        {
+            _drilledPlugin = null;
+            Render();
+        };
+
+        ContentHost.Children.Add(back);
     }
 
     /// <summary>

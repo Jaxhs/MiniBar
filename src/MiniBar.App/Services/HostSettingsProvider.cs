@@ -217,6 +217,14 @@ public sealed class HostSettingsProvider
             Icon = "glyph:E8B8",
             Items = new[]
             {
+                Item.Toggle(S.EnableTrayIcon, value =>
+                {
+                    S.EnableTrayIcon = value;
+                    Commit(false);
+                    AppServices.Shell?.ApplyTrayIconSetting();
+                }, "显示系统托盘图标",
+                    "通知区域里常驻一枚图标：左键显示/隐藏任务栏、右键打开菜单、双击打开设置"),
+
                 Item.Toggle(S.CloseFlyoutOnDeactivate, value =>
                 {
                     S.CloseFlyoutOnDeactivate = value;

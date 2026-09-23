@@ -409,6 +409,16 @@ public partial class App : Application
 
         try
         {
+            // 移除系统托盘图标（被强杀时它可能残留到下一次鼠标划过，尽量清掉）
+            AppServices.Shell?.Bar?.Tray.Dispose();
+        }
+        catch
+        {
+            // 同上
+        }
+
+        try
+        {
             // 没改过任务栏设置的话，Restore 什么都不做
             Interop.SystemTaskbar.Restore();
         }

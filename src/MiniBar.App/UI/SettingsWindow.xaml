@@ -110,7 +110,10 @@
 
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="228" />
+                <!-- 导航列不再写死：给一个初始宽 + 最小/最大，中间放一个 GridSplitter，
+                     用户拖到哪算哪。这样窗口拉窄也不会出现横向滚动条（见下面的 ListBox）。 -->
+                <ColumnDefinition Width="228" MinWidth="168" MaxWidth="400" />
+                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
 
@@ -121,20 +124,31 @@
                     BorderThickness="0,0,1,0">
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Top"
-                               Text="宿主设置与插件"
+                               Text="导航"
                                Margin="8,4,0,6"
                                FontSize="11.5"
                                Foreground="{DynamicResource MutedForegroundBrush}" />
                     <ListBox x:Name="NavList"
                              Background="Transparent"
                              BorderThickness="0"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                              ItemContainerStyle="{StaticResource NavItemStyle}"
                              ItemTemplate="{StaticResource NavItemTemplate}"
                              SelectionChanged="OnNavSelectionChanged" />
                 </DockPanel>
             </Border>
 
-            <ScrollViewer Grid.Column="1"
+            <!-- GridSplitter：拖这条竖线就能调整左侧导航宽度 -->
+            <GridSplitter Grid.Column="1"
+                          Width="6"
+                          HorizontalAlignment="Center"
+                          VerticalAlignment="Stretch"
+                          Background="Transparent"
+                          ShowsPreview="False"
+                          ResizeDirection="Columns"
+                          ResizeBehavior="PreviousAndNext" />
+
+            <ScrollViewer Grid.Column="2"
                           VerticalScrollBarVisibility="Auto"
                           Style="{StaticResource MiniBarScrollViewerStyle}">
                 <StackPanel x:Name="ContentHost" Margin="18,14,18,22" />
