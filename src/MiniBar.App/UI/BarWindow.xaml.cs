@@ -38,6 +38,12 @@ public partial class BarWindow : Window
     // 用缓存让同一插件只创建一次，避免每次布局都重建；插件卸载时从这里面移除并释放。
     private readonly Dictionary<string, FrameworkElement> _widgets = new(StringComparer.OrdinalIgnoreCase);
 
+    // 上一次应用设置时的停靠方向（true = 贴在左/右边缘，纵向）。
+    // 用来判断"横向 ↔ 纵向"是否发生了变化 —— 变了就必须重建插件内嵌内容，
+    // 因为插件会读 IPluginContext.IsBarVertical 决定排版（例如时钟在侧边只显示 HH:mm）。
+    // 初值给 null 表示"还没定过"，第一次 ApplySettings 时会按当时方向定下来而不触发重建。
+    private bool? _lastVertical;
+
     // —— 鼠标交互用的临时状态（一次“按下→移动→抬起”周期内有效）——
     private PluginDescriptor? _pressItem;   // 当前按下的那个任务图标对应的插件
     private Point _pressPoint;              // 按下时的鼠标坐标（用来判断是否超过拖拽阈值）
@@ -295,11 +301,17 @@ public partial class BarWindow : Window
         GripButton.Width = vertical ? double.NaN : 30;
         GripButton.Height = vertical ? 30 : double.NaN;
 
+        // 工具条里的两个按钮也要跟着换方向：侧边模式只有几十像素宽，
+        // 两个按钮横着放会横向撑爆（被裁掉一半）。竖着摞起来就正常了。
+        RightTools.Orientation = vertical ? Orientation.Vertical : Orientation.Horizontal;
+
         var display = DisplayService.GetByIndex(settings.MonitorIndex);
 
-        // 占用屏幕空间时尽量贴住边缘（薄薄留一点边给投影），悬浮时留出完整投影空间
+        // 占用屏幕空间时尽量贴住边缘（薄薄留一点边给投影），悬浮时留出完整投影空间。
+        // 侧边（竖排）模式下左右留白是在"偷"本该给内容的宽度，所以左右收窄到 3、
+        // 上下放宽到 4（这条边长度富余，多占一点无所谓）。
         ShellBorder.Margin = settings.UseAppBar
-            ? new Thickness(4, 3, 4, 3)
+            ? vertical ? new Thickness(3, 4, 3, 4) : new Thickness(4, 3, 4, 3)
             : new Thickness(7);
 
         if (settings.UseAppBar)
@@ -310,17 +322,23 @@ public partial class BarWindow : Window
             MaxWidth = double.PositiveInfinity;
             MaxHeight = double.PositiveInfinity;
 
+            // 侧边（左/右）模式需要更宽一点：图标约 38 DIP，再加上文字标签与留白，
+            // 沿用横排的 28~52 会把图标挤变形，所以竖排单独给个更高的下限 56。
+            // 这里必须和 Reposition 里向系统申请的厚度是同一个值（EffectiveAppBarThickness）。
+            var thickness = EffectiveAppBarThickness;
+
             if (vertical)
             {
-                Width = Math.Max(28, settings.AppBarThickness);
+                Width = thickness;
                 Height = double.NaN;
             }
             else
             {
-                Height = Math.Max(28, settings.AppBarThickness);
+                Height = thickness;
                 Width = double.NaN;
             }
         }
+
         else
         {
             // 悬浮胶囊模式：内容自适应大小，用 MaxWidth/MaxHeight 约束换行
@@ -340,6 +358,30 @@ public partial class BarWindow : Window
             MaxHeight = Math.Max(120, (display.WorkArea.Height / scale) - (settings.Margin * 2));
         }
 
+        // 图标区 / 文字标签的排版参数跟随方向：
+        // 横排 = 图标和文字左右放；竖排（左/右边缘）= 图标在上、文字在下，
+        // 并且给文字一个"厚度 - 留白"的宽度上限，超出的用省略号收尾。
+        _vm.ItemAreaMargin = vertical ? new Thickness(0, 6, 0, 6) : new Thickness(9, 0, 9, 0);
+        _vm.ItemLabelMargin = vertical ? new Thickness(0, 3, 0, 0) : new Thickness(6, 0, 2, 0);
+        _vm.ItemLabelMaxWidth = vertical
+            ? Math.Max(24, EffectiveAppBarThickness - 12)
+            : double.PositiveInfinity;
+
+        // 竖排时把每个任务项钉成"整条边的可用宽度"：
+        // 68 - 左右外边距 6 - 内边距 8 = 54，正好是内容区宽度。
+        // 横排保持 NaN = 由内容撑开。
+        _vm.ItemWidth = vertical
+            ? Math.Max(46, EffectiveAppBarThickness - 14)
+            : double.NaN;
+
+        // 方向真的变了才重建（第一次只是把基线定下来，不必白白重建一次）
+        if (_lastVertical is { } previous && previous != vertical)
+        {
+            RebuildWidgetsForOrientation();
+        }
+
+        _lastVertical = vertical;
+
         SyncAppBarRegistration();
 
         if (!_shell.IsMiniMode)
@@ -348,6 +390,13 @@ public partial class BarWindow : Window
         }
 
         RefreshMiniIndicator();
+
+        // 必须显式重贴边缘：
+        // 之前这里没有 Reposition，窗口位置只在"尺寸变化"时由 SizeChanged 顺带更新 ——
+        // 于是**顶 ↔ 底**（同为横排、厚度一样、尺寸没变）这种切换根本不会重新定位，
+        // 表现为"从顶部改不到底部，必须先绕到左/右再回来"。
+        // Reposition 内部有防回环（_lastAppBarSet），重复调用是安全的。
+        Reposition();
     }
 
     /// <summary>
@@ -369,6 +418,31 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 实际要向系统申请的 AppBar 厚度（DIP）—— 窗口宽度与"占位"必须用同一个值。
+    ///
+    /// 侧边（左/右）模式是竖排的，图标在上、文字在下，比横排需要更宽的空间，
+    /// 所以竖排单独给一个 56 的下限；横排沿用 28。
+    ///
+    /// <para><b>为什么必须抽出来：</b>之前窗口宽度用的是 <c>Math.Max(56, 设置值)</c>，
+    /// 但向系统申请的却还是原始的设置值（默认 52）—— 系统只批 52 DIP 的条带，
+    /// 窗口被压回 52，文字（"04:06"、"M55"）就被挤成省略号。
+    /// 两处不一致是"侧边显示有问题"的直接原因。</para>
+    /// </summary>
+    private double EffectiveAppBarThickness => _vm.IsVertical
+        ? Math.Max(VerticalMinThickness, _settings.Settings.AppBarThickness)
+        : Math.Max(28, _settings.Settings.AppBarThickness);
+
+    /// <summary>
+    /// 侧边模式的最小厚度（DIP）。
+    ///
+    /// <para>横排的默认厚度 52 在竖排时不够用：扣掉外边距(3+3)、内边距(4+4)、任务项外边距(2+2)
+    /// 之后只剩 54，而 "04:07" 这样的等宽读数就要占 39 —— 所以横排的厚度直接搬过来，
+    /// 读数末尾一定会被裁掉（"04:0…"）。68 是实测刚好放得下图标 + 一行读数的值。</para>
+    /// <para>用户把厚度调得比这个大时会用用户的值，这里只是"兜底下限"。</para>
+    /// </summary>
+    private const double VerticalMinThickness = 68;
+
     /// <summary>把窗口贴回设定的边缘（像素级定位，PerMonitorV2 下最稳）。</summary>
     public void Reposition()
     {
@@ -388,7 +462,7 @@ public partial class BarWindow : Window
             var granted = AppBar.SetPosition(
                 settings.Edge,
                 display.Bounds,
-                settings.AppBarThickness * scale,
+                EffectiveAppBarThickness * scale,
                 settings.Margin * scale);
 
             _lastAppBarSet = Environment.TickCount64;
@@ -670,7 +744,16 @@ public partial class BarWindow : Window
 
             if (provider.WidgetWidth > 0)
             {
-                widget.Width = provider.WidgetWidth;
+                // 侧边（左/右）模式下任务栏很窄，插件声明的固定宽度（例如时钟的 74 DIP）
+                // 可能比这一条边的厚度还宽，直接照搬会把内容挤出任务栏 —— 这里取两者较小值，
+                // 内容自己用省略号收尾（插件的读数文本都加了 TextTrimming）。
+                // 竖排时的可用宽度直接用 VM 里算好的 ItemWidth（已扣掉外边距与内边距），
+                // 再减掉任务项自己的左右外边距 2+2 —— 用 ActualWidth 猜容易在首次布局时为 0，
+                // 那会退化成"不限宽"，读数反而被外层裁掉。
+                var limit = _vm.IsVertical && _vm.ItemWidth > 0
+                    ? Math.Max(24, _vm.ItemWidth - 4)
+                    : double.PositiveInfinity;
+                widget.Width = Math.Min(provider.WidgetWidth, limit);
             }
 
             if (provider.WidgetHeight > 0)
@@ -709,6 +792,35 @@ public partial class BarWindow : Window
         {
             AppLog.Warn($"释放插件内嵌内容失败：{pluginId}", ex);
         }
+    }
+
+    /// <summary>
+    /// 停靠方向在"横向 ↔ 纵向"之间切换后，重建所有插件的内嵌内容。
+    ///
+    /// 为什么要这么做：插件靠 <c>IPluginContext.IsBarVertical</c> 决定排版（侧边只有几十像素宽，
+    /// 长文本会被截成省略号），但宿主把 widget 缓存起来了、同一插件只 CreateBarWidget 一次，
+    /// 不重建的话插件拿到的永远是旧方向。
+    /// 顺序很重要：先让插件释放旧 widget，再把容器里的 Content 清空
+    /// （不清的话 AttachWidgetToContainer 看到 Content 非空会直接跳过），最后重新挂载。
+    /// </summary>
+    private void RebuildWidgetsForOrientation()
+    {
+        foreach (var id in _widgets.Keys.ToArray())
+        {
+            ReleaseWidget(id);
+        }
+
+        for (var i = 0; i < _vm.PinnedItems.Count; i++)
+        {
+            if (ItemsHost.ItemContainerGenerator.ContainerFromIndex(i) is FrameworkElement container &&
+                FindDescendant<ContentControl>(container, "WidgetHost") is { } host)
+            {
+                host.Content = null;
+            }
+        }
+
+        AttachWidgets();
+        AppLog.Debug(_vm.IsVertical ? "方向已切为纵向，插件内嵌内容已重建" : "方向已切为横向，插件内嵌内容已重建");
     }
 
     /// <summary>窗口关闭前统一释放所有插件内嵌内容（逐个调用 ReleaseWidget）。</summary>

@@ -71,6 +71,22 @@ public interface IPluginContext
     bool IsMiniMode { get; }
 
     /// <summary>
+    /// 任务栏是否以<b>纵向</b>方式停靠（即贴在左/右边缘）。
+    ///
+    /// <para><b>为什么插件需要知道这个：</b>侧边模式下任务栏只有几十像素宽，
+    /// 横向排布的长文本（例如 "C15 M62"、"23:47:45 周三"）会被省略号截断、很难看。
+    /// 插件可以据此换用更紧凑的表达：</para>
+    /// <list type="bullet">
+    ///   <item>时钟：只显示 "HH:mm"；</item>
+    ///   <item>系统监视：改成两行 "C15 / M62"；</item>
+    ///   <item>久坐提醒："45分" 而不是 "坐45分"。</item>
+    /// </list>
+    /// <para>宿主在方向变化时会重新调用 <c>CreateBarWidget</c>/<c>CreateCompactContent</c>，
+    /// 所以按这个属性决定排版是安全的。</para>
+    /// </summary>
+    bool IsBarVertical { get; }
+
+    /// <summary>
     /// 用户已经多久没有键鼠操作了（宿主调用 Win32 <c>GetLastInputInfo</c> 得到，开销极小）。
     /// 典型用途：久坐提醒要区分"人在座位上"和"人离开了" —— 离开就不要计时，也不该弹提醒。
     /// </summary>

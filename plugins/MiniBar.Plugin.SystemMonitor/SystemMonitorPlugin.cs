@@ -130,7 +130,12 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
 
     // ---------------------------------------------------------------- 内嵌内容
 
-    public double WidgetWidth => 74;
+    /// <summary>
+    /// 内嵌读数的建议宽度。
+    /// 侧边（左/右）模式下任务栏只有几十像素宽，横排的 "C15 M62" 必然被截掉，
+    /// 所以那时改走竖排两行，宽度也收窄 —— 反正 "C15" 这种四字符占不了 74 DIP。
+    /// </summary>
+    public double WidgetWidth => _context.IsBarVertical ? 44 : 74;
 
     /// <summary>创建任务栏上的内嵌读数控件（一个 <c>TextBlock</c> 包在 <c>Border</c> 里）。
     /// <para><b>为什么要 Border 包一层：</b>悬停提示（Tooltip）挂在 Border 上而不是 TextBlock 上，
@@ -393,8 +398,17 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
     /// <summary>刷新任务栏读数，并把完整读数同步到悬停提示（文字被省略号截断时也能看全）。</summary>
     private void UpdateBarText()
     {
-        var text = $"C{_cpuPercent:0} M{MemoryUsedPercent():0}";
+        // 侧边（纵向）模式下任务栏很窄，一行放不下两个读数 —— 改成上下两行 "C15" / "M62"。
+        var text = _context.IsBarVertical
+            ? $"C{_cpuPercent:0}\nM{MemoryUsedPercent():0}"
+            : $"C{_cpuPercent:0} M{MemoryUsedPercent():0}";
+
         SetText(_barText, text);
+
+        if (_barText is not null)
+        {
+            _barText.TextAlignment = _context.IsBarVertical ? TextAlignment.Center : TextAlignment.Left;
+        }
 
         // 悬停提示里给出完整读数（文字被省略号截断时也不用猜）
         if (_barWidgetBorder is not null)

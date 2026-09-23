@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using System.Windows.Controls;
 using MiniBar.App.Hosting;
 using MiniBar.App.Infrastructure;
@@ -15,6 +16,10 @@ namespace MiniBar.App.ViewModels;
 public sealed class BarViewModel : ObservableObject
 {
     private Orientation _itemsOrientation = Orientation.Horizontal;
+    private Thickness _itemAreaMargin = new(9, 0, 9, 0);
+    private Thickness _itemLabelMargin = new(6, 0, 2, 0);
+    private double _itemLabelMaxWidth = double.PositiveInfinity;
+    private double _itemWidth = double.NaN;
     private bool _showLabels;
     private bool _hasOverflow;
     private bool _isEmpty = true;
@@ -47,6 +52,33 @@ public sealed class BarViewModel : ObservableObject
     {
         get => _showLabels;
         set => SetProperty(ref _showLabels, value);
+    }
+
+    /// <summary>
+    /// 每个图标区的外边距。横排时左右留白、竖排时上下留白 ——
+    /// 侧边（左/右）模式下任务栏很窄，若还按横排那样左右留 9，图标就会被挤掉。
+    /// </summary>
+    public Thickness ItemAreaMargin
+    {
+        get => _itemAreaMargin;
+        set => SetProperty(ref _itemAreaMargin, value);
+    }
+
+    /// <summary>文字标签的外边距，同样跟随方向（竖排时改为上下留白）。</summary>
+    public Thickness ItemLabelMargin
+    {
+        get => _itemLabelMargin;
+        set => SetProperty(ref _itemLabelMargin, value);
+    }
+
+    /// <summary>
+    /// 文字标签的最大宽度。竖排时限制为"任务栏厚度 - 留白"，超出的用省略号收尾；
+    /// 横排时不限制（正无穷）。
+    /// </summary>
+    public double ItemLabelMaxWidth
+    {
+        get => _itemLabelMaxWidth;
+        set => SetProperty(ref _itemLabelMaxWidth, value);
     }
 
     public bool HasOverflow
@@ -85,6 +117,22 @@ public sealed class BarViewModel : ObservableObject
         get => _gripGlyph;
         set => SetProperty(ref _gripGlyph, value);
     }
+
+    /// <summary>
+    /// 每个任务项在停靠方向上的<b>占用宽度</b>（DIP）。
+    ///
+    /// <para>横排时给 <see cref="double.NaN"/>：宽度交给内容自己撑开（任务栏够宽，不需要钉死）。</para>
+    /// <para>竖排（左/右边缘）时必须给一个具体值：任务栏变窄后，
+    /// <c>WrapPanel</c> 默认只给每项"内容宽度"，于是角标会压在内嵌读数上、
+    /// 文字居中位置也随内容长度左右跳。钉成整条边的宽度后，每项都占满一行，
+    /// 读数居中、角标待在右上角，看起来才正常。</para>
+    /// </summary>
+    public double ItemWidth
+    {
+        get => _itemWidth;
+        set => SetProperty(ref _itemWidth, value);
+    }
+
 
     /// <summary>
     /// 最小变更同步：把 target 集合调整成与 desired 顺序一致，但只做“必要的增/删/移动”。

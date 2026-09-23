@@ -75,6 +75,9 @@ internal sealed class PluginContext : IPluginContext, IDisposable
 
     public bool IsMiniMode => AppServices.Shell?.IsMiniMode ?? false;
 
+    /// <summary>任务栏是否贴在左/右边缘（纵向停靠）。插件据此把内嵌读数排得更紧凑。</summary>
+    public bool IsBarVertical => AppServices.Shell?.Bar?.ViewModel.IsVertical ?? false;
+
     /// <summary>用户空闲时长。宿主已经封装了 GetLastInputInfo，插件不用自己做 P/Invoke。</summary>
     public TimeSpan UserIdleTime
     {

@@ -45,18 +45,26 @@
                                     HorizontalContentAlignment="Stretch"
                                     VerticalContentAlignment="Center" />
 
+                    <!-- 图标区：方向和边距都跟随任务栏方向（横排=图标+文字左右排；竖排=图标在上、文字在下）。
+                         侧边（左/右）模式下任务栏很窄，若按横排那样左右留白，图标会被挤出去。 -->
                     <StackPanel x:Name="IconArea"
-                                Orientation="Horizontal"
+                                Orientation="{Binding DataContext.ItemsOrientation, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                Margin="{Binding DataContext.ItemAreaMargin, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                                 HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Margin="9,0">
+                                VerticalAlignment="Center">
                         <ContentControl Content="{Binding Icon}"
                                         ContentTemplate="{StaticResource PluginIconTemplate}"
+                                        HorizontalAlignment="Center"
                                         VerticalAlignment="Center" />
                         <TextBlock x:Name="ItemLabel"
                                    Text="{Binding DisplayName}"
-                                   Margin="6,0,2,0"
+                                   Margin="{Binding DataContext.ItemLabelMargin, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                   MaxWidth="{Binding DataContext.ItemLabelMaxWidth, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextAlignment="Center"
+                                   HorizontalAlignment="Center"
                                    VerticalAlignment="Center"
+                                   ToolTip="{Binding DisplayName}"
                                    Visibility="{Binding DataContext.ShowLabels, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BoolToVisibility}}" />
                     </StackPanel>
 
@@ -101,6 +109,14 @@
                 <DataTrigger Binding="{Binding BadgeIsAccent}" Value="True">
                     <Setter TargetName="BadgePill" Property="Background" Value="{DynamicResource AccentBrush}" />
                     <Setter TargetName="BadgeText" Property="Foreground" Value="{DynamicResource AccentForegroundBrush}" />
+                </DataTrigger>
+                <!-- 有内嵌读数时收起右上角标：任务项宽度就是读数宽度，角标必然压在读数上
+                     （实测 "C18 M55" 会被 "18%" 盖住后半截）。读数本身已经表达了同一个数字
+                     和状态（"该动了"这种会直接把读数染成强调色），所以收起角标不丢信息。
+                     没有内嵌读数的插件（例如便签）照常显示角标。
+                     注意必须放在 HasBadge 那条之后：触发器按顺序覆盖 Visibility。 -->
+                <DataTrigger Binding="{Binding HasBarWidget}" Value="True">
+                    <Setter TargetName="BadgePill" Property="Visibility" Value="Collapsed" />
                 </DataTrigger>
                 <DataTrigger Binding="{Binding IsPanelOpen}" Value="True">
                     <Setter TargetName="ItemRoot" Property="Background" Value="{DynamicResource ActiveBrush}" />
@@ -171,7 +187,11 @@
                               VerticalAlignment="Center">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
-                            <WrapPanel Orientation="{Binding ItemsOrientation}" />
+                            <!-- ItemWidth：横排时是 NaN（每项按内容撑开）；
+                                 竖排时钉成整条边的宽度，否则 WrapPanel 只给"内容宽度"，
+                                 角标会压在内嵌读数上。 -->
+                            <WrapPanel Orientation="{Binding ItemsOrientation}"
+                                       ItemWidth="{Binding ItemWidth}" />
                         </ItemsPanelTemplate>
                     </ItemsControl.ItemsPanel>
                 </ItemsControl>

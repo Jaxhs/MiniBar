@@ -99,7 +99,28 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
     /// 写死宽度时，用户一旦把格式改成 "HH:mm:ss ddd"（例如 "23:22:02 周三"），
     /// 文字就会超出这一格被切掉 —— 也就是"内容过多显示不全"。
     /// </summary>
-    public double WidgetWidth => EstimateTextWidth(DateTime.Now.ToString(_barFormat)) + 20;
+    public double WidgetWidth => EstimateTextWidth(DateTime.Now.ToString(BarTextFormat)) + 20;
+
+    /// <summary>
+    /// 任务栏上真正用的时间格式。
+    /// 侧边（左/右）模式下任务栏只有几十像素宽，"23:47:45 周三" 这种长格式会被截成省略号，
+    /// 所以那时自动退化成"时:分"（保留用户选的 12/24 小时制和分隔符，只去掉秒与星期）。
+    /// </summary>
+    private string BarTextFormat => _context.IsBarVertical ? CompactFormat(_barFormat) : _barFormat;
+
+    /// <summary>
+    /// 把时间格式压成"时:分"：去掉秒（ss/s）、星期（dddd/ddd），再清掉因此多出来的分隔符与空格。
+    /// 例如 "HH:mm:ss" → "HH:mm"、"HH:mm:ss ddd" → "HH:mm"、"tt h:mm:ss" → "tt h:mm"。
+    /// </summary>
+    private static string CompactFormat(string format)
+    {
+        var s = format.Replace("dddd", string.Empty).Replace("ddd", string.Empty)
+                      .Replace("ss", string.Empty).Replace(":s", string.Empty);
+
+        s = s.Trim().TrimEnd(':', ' ', ',', '.', '-');
+
+        return string.IsNullOrEmpty(s) ? "HH:mm" : s;
+    }
 
     /// <summary>粗估一段文字的显示宽度：中日韩字符按 13.5 DIP、其余按 8.6 DIP 计，再留 6 DIP 余量。</summary>
     private static double EstimateTextWidth(string text)
@@ -330,7 +351,7 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
         _timer = null;
     }
 
-    private void UpdateBarText() => SetText(_barText, DateTime.Now.ToString(_barFormat));
+    private void UpdateBarText() => SetText(_barText, DateTime.Now.ToString(BarTextFormat));
 
     private void UpdateCompactText() => SetText(_compactText, DateTime.Now.ToString(ShowSeconds ? "HH:mm:ss" : "HH:mm"));
 

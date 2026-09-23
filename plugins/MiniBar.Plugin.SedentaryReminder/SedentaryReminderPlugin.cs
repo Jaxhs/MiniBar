@@ -229,7 +229,11 @@ public sealed class SedentaryReminderPlugin : IMinibarPlugin, ITaskButtonPlugin,
     /// 内嵌内容的建议宽度。返回 0 = 让内容自己撑开。
     /// 这里给一个固定值，避免倒计时从 "9 分" 变成 "10 分" 时任务栏左右抖动。
     /// </summary>
-    public double WidgetWidth => 74;
+    /// <summary>
+    /// 建议宽度：侧边（左/右）模式下任务栏只有几十像素宽，
+    /// "坐45分" 这种带汉字的会被截掉，那时改显示 "45分" 并收窄格子。
+    /// </summary>
+    public double WidgetWidth => _context.IsBarVertical ? 40 : 74;
 
     public FrameworkElement CreateBarWidget()
     {
@@ -628,22 +632,25 @@ public sealed class SedentaryReminderPlugin : IMinibarPlugin, ITaskButtonPlugin,
             return;
         }
 
+        // 侧边（纵向）模式下任务栏很窄，去掉汉字只留数字，靠图标本身表达含义
+        var vertical = _context.IsBarVertical;
+
         if (IsPaused)
         {
-            _widgetText.Text = "已暂停";
+            _widgetText.Text = vertical ? "停" : "已暂停";
             _widgetText.Foreground = ToBrush(_context.Theme.Muted);
             return;
         }
 
         if (_awaitingBreak)
         {
-            _widgetText.Text = "该动了";
+            _widgetText.Text = vertical ? "动" : "该动了";
             _widgetText.Foreground = ToBrush(_context.Theme.Accent);
             return;
         }
 
         var left = Math.Max(0, _intervalMinutes - SittingMinutes);
-        _widgetText.Text = $"坐{left:0}分";
+        _widgetText.Text = vertical ? $"{left:0}分" : $"坐{left:0}分";
         _widgetText.Foreground = ToBrush(_context.Theme.Muted);
 
         _context.InvalidateBarItem(); // 徽标/Tooltip 里也有倒计时，一起刷新

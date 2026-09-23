@@ -47,6 +47,9 @@ public sealed class AppBarService : IDisposable
 
     public bool IsRegistered { get; private set; }
 
+    /// <summary>当前注册在哪条边；未注册时为 null。用来判断"换边"是否需要重新注册。</summary>
+    public DockEdge? RegisteredEdge { get; private set; }
+
     /// <summary>是否已经拿到窗口句柄（诊断用）。</summary>
     public bool HasHandle => _hwnd != IntPtr.Zero;
 
@@ -101,16 +104,37 @@ public sealed class AppBarService : IDisposable
 
         SHAppBarMessage(ABM_REMOVE, ref data);
         IsRegistered = false;
+        RegisteredEdge = null;
         AppLog.Info("已注销 AppBar，屏幕空间已归还");
     }
 
     /// <summary>
     /// 申请沿指定边缘的一条空间。返回系统实际批给我们的矩形（像素）；
     /// 失败时返回 null，调用方应退回自己的浮动定位逻辑。
+    ///
+    /// <para><b>换边必须先注销再注册（重点，踩过坑）：</b>
+    /// AppBar 一旦注册在某一边缘，Shell 就会按那个边缘来裁剪我们之后提交的矩形
+    /// （<c>ABM_QUERYPOS</c> 会把请求位置的矩形"收拢"到当前边缘）。
+    /// 于是"当前在顶部 → 想改到底部"时，SETPOS 请求底部矩形会被系统削回顶部，看起来就是
+    /// "改不动，必须先转到左/右再转到底部"。
+    /// 所以这里一旦发现边缘变了，就先 <c>ABM_REMOVE</c> 再 <c>ABM_NEW</c> + SETPOS。</para>
     /// </summary>
     public Rect? SetPosition(DockEdge edge, Rect monitorBounds, double thicknessPixels, double marginPixels)
     {
-        if (!IsRegistered || _hwnd == IntPtr.Zero)
+        if (_hwnd == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        // 换边处理：先注销再重新注册，否则 Shell 会按【旧的边缘】裁剪新矩形，
+        // 结果就是"从顶部改不到底部"。详见本方法的文档注释。
+        if (IsRegistered && RegisteredEdge is { } current && current != edge)
+        {
+            AppLog.Info($"AppBar 换边：{current} → {edge}（先注销再重新注册）");
+            Unregister();
+        }
+
+        if (!IsRegistered && !Register())
         {
             return null;
         }
@@ -157,6 +181,9 @@ public sealed class AppBarService : IDisposable
 
         // SETPOS：登记占用，返回真正生效的矩形
         SHAppBarMessage(ABM_SETPOS, ref data);
+
+        // 记住这一次的边缘，下次调用时用它判断是不是"换边"
+        RegisteredEdge = edge;
 
         var granted = data.rc.ToRect();
         AppLog.Debug($"AppBar 位置已登记：{edge} -> {granted}");
