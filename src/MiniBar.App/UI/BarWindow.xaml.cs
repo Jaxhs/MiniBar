@@ -179,6 +179,16 @@ public partial class BarWindow : Window
         if (want && !Tray.IsVisible)
         {
             Tray.Show($"MiniBar · {_settings.Settings.Edge} 边");
+
+            // 首次显示时用气泡提示一次：Windows 默认把新托盘图标折叠进"隐藏的图标"面板，
+            // 用户看不到就会以为"托盘图标没出来"，所以主动告诉他去哪儿找、怎么固定。
+            if (!_settings.Settings.TrayTipShown)
+            {
+                _settings.Settings.TrayTipShown = true;
+                _settings.NotifyChanged();
+                Tray.ShowBalloon("MiniBar 已在系统托盘",
+                    "如果没看到图标：点任务栏右下角的 ^ 展开查看，或到「设置 → 个性化 → 任务栏 → 其他系统托盘图标」把 MiniBar 设为“始终显示”。");
+            }
         }
         else if (!want && Tray.IsVisible)
         {
@@ -1016,15 +1026,13 @@ public partial class BarWindow : Window
     {
         var menu = MainMenuBuilder.Build(_plugins, _settings, _shell, this);
 
-        // 定位（最后一次实验的结论，采用 Point + 相对任务栏边框的鼠标坐标）：
-        //   · Bottom/窗口做目标：钉在固定位置，不跟鼠标；
-        //   · MousePoint / RelativePoint / AbsolutePoint：PerMonitorV2 缩放下全部偏（右缘对齐鼠标）；
-        //   · Point + PlacementTarget=ShellBorder + Mouse.GetPosition(ShellBorder)：交给 WPF 换算 DPI。
-        // 提示：Windows 的「菜单对齐方式」（MenuDropAlignment，常见于平板/左手模式）若为 true，
-        // 所有右键菜单都会弹在鼠标左侧（右缘贴鼠标）—— 这是系统级设置，不是本程序的定位错误。
-
-        menu.PlacementTarget = this;
-        menu.Placement = PlacementMode.MousePoint;
+        // 定位 + 打开都交给 MenuBuilder.ShowAtCursor（它内部会设置 Placement 并 IsOpen=true）。
+        //
+        // 为什么不能用 MousePoint：系统开了「菜单右对齐」（MenuDropAlignment=True，平板/左手模式）
+        // 时，WPF 会把菜单【右缘】贴到鼠标 —— 鼠标点屏幕左半边时菜单整体被弹到左侧、
+        // 甚至大部分跑到屏幕外，看起来就是"右键没反应"。
+        // AbsolutePoint 不受这个系统设置影响：实测菜单左上角≈鼠标位置（误差 <10px）。
+        MenuBuilder.ShowAtCursor(menu, GetDpiScale());
     }
 
     /// <summary>
@@ -1034,6 +1042,8 @@ public partial class BarWindow : Window
     /// </summary>
     private void OnTrayMessage(int mouseMessage)
     {
+        AppLog.Debug($"托盘鼠标消息：0x{mouseMessage:X}");
+
         switch (mouseMessage)
         {
             case TrayIcon.WM_LBUTTONUP:

@@ -1,3 +1,4 @@
+using System.Windows;
 using System.Collections.Generic;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -76,20 +77,31 @@ public static class MenuBuilder
     /// </summary>
     public static void ShowAtCursor(ContextMenu menu, double dpiScale)
     {
-        // 坐标单位说明（做过标定实验：偏移 (100,100) 时菜单左上角落在物理像素 (135,145)）：
-        // WPF Popup 在 AbsolutePoint 模式下的 HorizontalOffset/VerticalOffset
-        // 以【DIP】为单位，WPF 会自己乘以 DPI 换算成物理像素（135 ≈ 100 × 1.25 + 阴影留白）。
-        // 所以这里要把 GetCursorPositionPixels 的物理像素【除以缩放比】换成 DIP 再传入。
-        //
-        // 顺带记录另外两种写法为什么不行：
-        //   · Placement=Bottom + 窗口做目标：菜单钉在窗口下沿的固定位置，不跟鼠标；
-        //   · Placement=MousePoint / RelativePoint：PerMonitorV2 缩放下会整体偏左。
+        // 坐标单位（做过标定实验：偏移传 (100,100) 时菜单左上角落在物理像素 (135,145)）：
+        // WPF Popup 在 AbsolutePoint 模式下的偏移以【DIP】为单位，WPF 自己会乘以 DPI，
+        // 所以要把 GetCursorPositionPixels 的物理像素【除以缩放比】传进去。
         var cursor = DisplayService.GetCursorPositionPixels();
         var scale = dpiScale > 0 ? dpiScale : 1.0;
 
+        // 量一下菜单自身宽度（还没打开也能量：Measure 会先算一遍理想尺寸）
+        menu.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var menuWidthDip = menu.DesiredSize.Width;
+
+        var x = cursor.X / scale;
+        var y = cursor.Y / scale;
+
+        // 系统「菜单右对齐」补偿（就是这一条让菜单"右键没反应/跑到屏幕外"）：
+        // Windows 的 SystemParameters.MenuDropAlignment 为 true 时（平板/左手模式的"菜单右对齐"设置），
+        // WPF 会把菜单【右缘】贴到我们给的点上 —— 鼠标在屏幕左半边时，菜单整体被甩到屏幕左侧外面。
+        // 补偿：x 再加一个菜单宽度，等价于让【左缘】落在鼠标处。鼠标靠右边缘时 WPF 会自己翻转，不会出屏。
+        if (SystemParameters.MenuDropAlignment)
+        {
+            x += menuWidthDip;
+        }
+
         menu.Placement = PlacementMode.AbsolutePoint;
-        menu.HorizontalOffset = cursor.X / scale;
-        menu.VerticalOffset = cursor.Y / scale;
+        menu.HorizontalOffset = x;
+        menu.VerticalOffset = y;
         menu.IsOpen = true;
     }
 

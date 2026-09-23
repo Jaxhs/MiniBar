@@ -223,7 +223,8 @@ public sealed class HostSettingsProvider
                     Commit(false);
                     AppServices.Shell?.ApplyTrayIconSetting();
                 }, "显示系统托盘图标",
-                    "通知区域里常驻一枚图标：左键显示/隐藏任务栏、右键打开菜单、双击打开设置"),
+                    "通知区域里常驻一枚图标：左键显示/隐藏任务栏、右键打开菜单、双击打开设置。" +
+                    "若看不到它，点任务栏右下角的 ^ 展开，或到「设置 → 个性化 → 任务栏 → 其他系统托盘图标」里设为“始终显示”"),
 
                 Item.Toggle(S.CloseFlyoutOnDeactivate, value =>
                 {

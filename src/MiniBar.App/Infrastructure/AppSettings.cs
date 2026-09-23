@@ -53,6 +53,15 @@ public sealed class AppSettings
     /// </summary>
     public bool EnableTrayIcon { get; set; } = true;
 
+    /// <summary>
+    /// 是否已经提示过"托盘图标可能被系统折叠"。
+    /// <para>
+    /// Windows 会把新出现的托盘图标默认收进"隐藏的图标"小面板里，用户看不到就会以为功能没生效。
+    /// 所以第一次显示托盘图标时弹一次气泡引导，之后不再打扰。
+    /// </para>
+    /// </summary>
+    public bool TrayTipShown { get; set; }
+
     public double BarOpacity { get; set; } = 0.94;
 
     public string Theme { get; set; } = "Light";

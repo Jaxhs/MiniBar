@@ -73,7 +73,7 @@ internal static class MainMenuBuilder
         {
             Header = "打开…",
             Style = (Style)Application.Current.FindResource("MiniBarMenuItemStyle"),
-            Icon = MenuBuilder.Icon("glyph:E9A7"),
+            Icon = MenuBuilder.Icon("glyph:E740"),
         };
         openMenu.Items.Add(MenuBuilder.Item("用户插件目录", () => OpenPath(AppPaths.UserPluginDirectory), "glyph:E838"));
         openMenu.Items.Add(MenuBuilder.Item("配置目录", () => OpenPath(AppPaths.ConfigDirectory), "glyph:E8A5"));
@@ -94,7 +94,7 @@ internal static class MainMenuBuilder
         {
             Header = "迷你模式",
             Style = (Style)Application.Current.FindResource("MiniBarMenuItemStyle"),
-            Icon = MenuBuilder.Icon("glyph:E9A7"),
+            Icon = MenuBuilder.Icon("glyph:E790"),
         };
 
         var compactPlugins = plugins.Plugins
@@ -173,7 +173,7 @@ internal static class MainMenuBuilder
         {
             Header = "界面与行为",
             Style = (Style)Application.Current.FindResource("MiniBarMenuItemStyle"),
-            Icon = MenuBuilder.Icon("glyph:E9A7"),
+            Icon = MenuBuilder.Icon("glyph:E8FD"),
         };
 
         // 停靠边
@@ -292,7 +292,7 @@ internal static class MainMenuBuilder
         {
             Header = "插件",
             Style = (Style)Application.Current.FindResource("MiniBarMenuItemStyle"),
-            Icon = MenuBuilder.Icon("glyph:E9A7"),
+            Icon = MenuBuilder.Icon("glyph:E838"),
         };
 
         var any = false;
