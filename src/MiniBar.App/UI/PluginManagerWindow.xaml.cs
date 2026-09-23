@@ -145,6 +145,14 @@ public partial class PluginManagerWindow : Window
             ok ? NotificationKind.Success : NotificationKind.Warning);
     }
 
+    private void OnSettingsClick(object sender, RoutedEventArgs e)
+    {
+        if (DescriptorFrom(sender) is { } descriptor)
+        {
+            _shell.ShowSettings(descriptor.Id);
+        }
+    }
+
     private async void OnRefreshClick(object sender, RoutedEventArgs e)
     {
         _shell.Notify("正在重新扫描插件目录…", NotificationKind.Info, TimeSpan.FromSeconds(1.2));

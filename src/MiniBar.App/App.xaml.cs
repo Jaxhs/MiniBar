@@ -84,6 +84,12 @@ public partial class App : Application
             shell.AttachBar(_bar);
             _bar.Show();
 
+            // AppBar 占用的是系统级资源：必须保证任何退出路径都把它还给系统，
+            // 否则一旦异常终止，用户桌面底部会永久空出一条（经验证 taskkill /F 就会这样）。
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseAppBarQuietly();
+            AppDomain.CurrentDomain.UnhandledException += (_, _) => ReleaseAppBarQuietly();
+            SessionEnding += (_, _) => ReleaseAppBarQuietly();
+
             AppServices.Hotkeys.Attach(_bar);
             RegisterHostHotkeys();
 
@@ -198,6 +204,10 @@ public partial class App : Application
 
         hotkeys.Register(HostHotkeyOwner, "manager", HotkeyModifiers.Control | HotkeyModifiers.Alt, Key.P,
             "Ctrl+Alt+P 打开插件管理");
+
+        // Ctrl+Alt+, 是 Windows 11 "打开设置" 的惯例键位；Ctrl+Alt+S 太容易被别的程序占用
+        hotkeys.Register(HostHotkeyOwner, "settings", HotkeyModifiers.Control | HotkeyModifiers.Alt, Key.OemComma,
+            "Ctrl+Alt+, 打开设置");
     }
 
     private void OnHotkeyTriggered(object? sender, HotkeyRegistration registration)
@@ -254,6 +264,10 @@ public partial class App : Application
 
             case "manager":
                 shell.ShowPluginManager();
+                break;
+
+            case "settings":
+                shell.ShowSettings();
                 break;
         }
     }
@@ -336,6 +350,19 @@ public partial class App : Application
     }
 
     // ---------------------------------------------------------------- 退出
+
+    /// <summary>把 AppBar 占用的屏幕空间还给系统（可被多次调用；异常一律吞掉）。</summary>
+    private static void ReleaseAppBarQuietly()
+    {
+        try
+        {
+            AppServices.Shell?.Bar?.AppBar.Dispose();
+        }
+        catch
+        {
+            // 退出路径上不允许再抛异常
+        }
+    }
 
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {

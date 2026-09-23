@@ -10,18 +10,20 @@
 
 | 你的要求 | 实现位置 | 说明 |
 | --- | --- | --- |
-| 常驻显示，其他窗口最大化时不遮挡 | `Interop/WindowDressing.cs`、`Interop/TopmostGuard.cs` | 无边框 `TOPMOST` 窗口 + `WS_EX_TOOLWINDOW`（不进 Alt+Tab、不占系统任务栏）。被最大化的窗口不是 TOPMOST，因此永远压不住我们；再加一个每 3 秒一次的 `SetWindowPos(HWND_TOPMOST)` 重申，防止被别的置顶窗口/安装器挤下去 |
-| 其他程序全屏时自动转为迷你窗口，显示指定插件的内容 | `Interop/FullscreenWatcher.cs`、`UI/MiniWindow.xaml`、`Services/ShellService.cs` | 前台窗口矩形铺满整块显示器（叠加 `SHQueryUserNotificationState` 识别独占全屏/演示模式）即判定为全屏 → 隐藏任务栏、显示迷你窗口渲染指定插件的紧凑内容；窗口带 `WS_EX_NOACTIVATE`，点它不会把全屏程序切走 |
+| **像任务栏一样占据一定的屏幕空间** | `Interop/AppBarService.cs` | 用 Shell 的 `SHAppBarMessage`（`ABM_NEW`/`ABM_QUERYPOS`/`ABM_SETPOS`/`ABM_REMOVE`）注册成系统 AppBar —— 和系统任务栏是同一套机制。注册后 Windows 会把**屏幕工作区**让出一条（实测 1920×1080 上工作区高度 1042 → 967），其它窗口最大化时会自动避开，不是靠置顶硬顶。隐藏/进迷你模式/退出前一定会 `ABM_REMOVE` 把空间还回去。也可以在设置里关掉，退回悬浮胶囊模式 |
+| 常驻显示，其他窗口最大化时不遮挡 | 同上 + `Interop/TopmostGuard.cs` | AppBar 保证工作区不被覆盖；再叠一层 `TOPMOST` + 每 3 秒重申，防止被别的置顶窗口/安装器挤下去 |
+| 其他程序全屏时自动转为迷你窗口，显示指定插件的内容 | `Interop/FullscreenWatcher.cs`、`UI/MiniWindow.xaml` | 两条腿：① AppBar 的 `ABN_FULLSCREENAPP` 系统通知（立即响应）② 700ms 轮询前台窗口矩形是否铺满整块显示器（校正，含无边框全屏）+ `SHQueryUserNotificationState` 兜底。进入时隐藏任务栏并归还空间，迷你窗口带 `WS_EX_NOACTIVATE`：点它不会把全屏程序切走 |
+| **宿主设置界面，可读取插件的设置** | `UI/SettingsWindow.xaml`、`Services/HostSettingsProvider.cs`、`MiniBar.Sdk/ISettingsPlugin` | 左侧是「宿主设置 + 每个插件」的导航，右侧渲染 `PluginSettingsSection` 卡片。插件实现 `ISettingsPlugin` 就能把自己的设置项挂上来（文本/开关/数值/下拉/路径选择/按钮/说明），宿主负责渲染与读写并即时生效；**宿主自己的设置用的是同一套模型**，所以两边长得完全一样。入口：`Ctrl+Alt+,` / 右键任务栏 → 设置… / `Ctrl+Alt+P` 插件管理器里每个插件的齿轮按钮 |
 | 插件图标像任务栏任务图标一样显示 | `UI/BarWindow.xaml(.cs)`、`ViewModels/BarViewModel.cs` | `ItemsControl` + `WrapPanel`，支持 4 条屏幕边缘（底/顶/左/右）自动换向 |
 | 可固定、排序 | `Hosting/PluginHost.cs`、`Hosting/PluginStateStore.cs` | 固定顺序持久化在 `plugins.json`；拖拽图标实时重排，松手即保存 |
 | 打开关闭界面 | `UI/FlyoutWindow.xaml`、`ShellService.OpenPanel/TogglePanel` | 点图标切换该插件的面板（任务栏式语义）；面板内容在关闭时立即释放 |
-| DLL 热插拔（加载/禁用/删除） | `Hosting/PluginLoadContext.cs`、`PluginHost.cs`、`PluginScanner.cs` | 每个插件一个可回收 `AssemblyLoadContext`；程序集**按字节流加载**，不锁文件，卸载后立刻可删 |
+| DLL 热插拔（加载/禁用/删除） | `Hosting/PluginLoadContext.cs`、`PluginHost.cs`、`PluginScanner.cs` | 每个插件一个可回收 `AssemblyLoadContext`；程序集**按字节流加载**，不锁文件，卸载后立刻可删。同一插件装了两份时按修改时间新的胜出，另一份标记为"重复文件"并在插件管理器里可一键删除 |
 | 在显示区域显示自定义内容 | `MiniBar.Sdk/IBarWidgetPlugin` | 插件可以把任意 WPF 元素直接嵌进任务栏（示例：时钟读数、CPU/内存读数） |
 | 在右键菜单中添加项 | `MiniBar.Sdk/IContextMenuPlugin` | 可挂到「任务栏空白处 / 图标上 / 迷你窗口 / 插件管理器」四个位置 |
 | 响应快捷键执行命令 | `MiniBar.Sdk/IHotkeyPlugin`、`Interop/HotkeyManager.cs` | 宿主统一 `RegisterHotKey`，冲突自动回传插件 |
-| 插件可出现在任意位置 | `IShellService.CreateWindow`、`IContextMenuPlugin`、`IBarWidgetPlugin` | 面板 / 迷你窗口 / 浮窗 / 任意菜单位置，全部由插件声明 |
+| 插件可出现在任意位置 | `IShellService.CreateWindow`、`IContextMenuPlugin`、`IBarWidgetPlugin`、`ISettingsPlugin` | 面板 / 迷你窗口 / 浮窗 / 任意菜单位置 / 设置页面，全部由插件声明 |
 | 拖拽文件或文件夹到程序上操作 | `BarWindow.OnFileDrop`、`MiniWindow`、`PluginManagerWindow`、`ShellService.HandleDrop` | 先问被拖到图标上的插件 → 再按顺序问其它拖放插件 → 都没人处理则走内置兜底 |
-| 拖入插件 DLL 直接加载 | `PluginHost.LoadPluginFile` | 自动复制到用户插件目录再加载（绝不留住外部文件句柄、也绝不误删用户自己的文件） |
+| 拖入插件 DLL 直接加载 | `PluginHost.LoadPluginFile` | 自动复制到用户插件目录再加载（绝不留住外部文件句柄、也绝不误删用户自己的文件）；拖入**更新版本**会直接替换旧版本 |
 | 低内存占用 | 见下文第 6 节 | 实测：空壳 + 4 个插件常驻 **28~48 MB**，空闲裁剪后可降到 **12 MB** 量级 |
 
 ---
@@ -60,7 +62,7 @@ MiniBar.sln
 │   ├─ IMinibarPlugin.cs       入口 + IPluginContext（宿主注入的运行环境）
 │   ├─ IShellService.cs        宿主能力门面：开面板/迷你模式/通知/浮窗/热插拔
 │   ├─ PluginManifestAttribute.cs
-│   ├─ Capabilities/           7 个能力接口，插件按需实现
+│   ├─ Capabilities/           8 个能力接口，插件按需实现
 │   └─ Models/                 图标、主题、菜单项、快捷键、拖放上下文……
 ├─ src/MiniBar.App/            宿主（约 6800 行）
 │   ├─ Hosting/                插件发现 / 加载 / 卸载 / 状态持久化 ← 热插拔核心
@@ -190,6 +192,7 @@ public sealed class FirstPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelConte
 | 拖拽固定图标 | 实时重排，松手即持久化 |
 | 拖入文件/文件夹 | 图标上 → 该插件优先；空白处 → 按安装顺序询问所有拖放插件；DLL → 直接热加载 |
 | `Ctrl+Alt+M` | 进入 / 退出迷你模式（全屏时也会自动进入） |
+| `Ctrl+Alt+,` | 打开设置窗口（宿主设置 + 所有插件的设置） |
 | `Ctrl+Alt+H` | 显示 / 隐藏任务栏 |
 | `Ctrl+Alt+P` | 打开插件管理器 |
 | `Ctrl+Alt+T` / `Ctrl+Alt+N` | 示例插件注册的快捷键（时钟 / 便签） |

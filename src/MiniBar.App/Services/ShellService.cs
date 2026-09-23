@@ -25,6 +25,7 @@ public sealed class ShellService : IShellService, IDisposable
     private MiniWindow? _mini;
     private ToastWindow? _toast;
     private PluginManagerWindow? _manager;
+    private SettingsWindow? _settingsWindow;
     private readonly List<FloatingWindow> _floatingWindows = new();
     private BarWindow? _bar;
 
@@ -413,6 +414,29 @@ public sealed class ShellService : IShellService, IDisposable
         }
     }
 
+    /// <summary>打开设置窗口（宿主设置 + 所有插件的设置）。</summary>
+    public void ShowSettings(string pluginId = "")
+    {
+        if (_settingsWindow is null || !_settingsWindow.IsLoaded)
+        {
+            _settingsWindow = new SettingsWindow(_plugins, _settings, this);
+        }
+
+        _settingsWindow.Show();
+
+        if (!string.IsNullOrEmpty(pluginId))
+        {
+            _settingsWindow.SelectPlugin(pluginId);
+        }
+
+        _settingsWindow.Activate();
+
+        if (_settingsWindow.WindowState == WindowState.Minimized)
+        {
+            _settingsWindow.WindowState = WindowState.Normal;
+        }
+    }
+
     // ---------------------------------------------------------------- 拖放
 
     /// <summary>
@@ -629,6 +653,7 @@ public sealed class ShellService : IShellService, IDisposable
         _mini?.ReleaseContent();
         _mini?.Close();
         _manager?.Close();
+        _settingsWindow?.Close();
         _toast?.Close();
         _flyout?.ClosePanel();
     }

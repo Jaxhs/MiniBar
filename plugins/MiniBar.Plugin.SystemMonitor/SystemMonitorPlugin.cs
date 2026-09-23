@@ -29,9 +29,12 @@ namespace MiniBar.Plugin.SystemMonitor;
     Order = 10,
     DefaultPinned = true)]
 public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetPlugin,
-    IPanelContentPlugin, ICompactContentPlugin, IContextMenuPlugin
+    IPanelContentPlugin, ICompactContentPlugin, IContextMenuPlugin, ISettingsPlugin
 {
-    private const int IntervalSeconds = 2;
+    private const int DefaultIntervalSeconds = 2;
+
+    private int _intervalSeconds = DefaultIntervalSeconds;
+    private bool _showBadge = true;
 
     private IPluginContext _context = null!;
     private DispatcherTimer? _timer;
@@ -54,7 +57,9 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
     public void Initialize(IPluginContext context)
     {
         _context = context;
-        context.Logger.Info("系统监视插件已就绪");
+        _intervalSeconds = Math.Clamp(context.GetSetting("IntervalSeconds", DefaultIntervalSeconds), 1, 30);
+        _showBadge = context.GetSetting("ShowBadge", true);
+        context.Logger.Info($"系统监视插件已就绪（每 {_intervalSeconds} 秒采样）");
         Sample();
     }
 
@@ -78,7 +83,7 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
 
     public string? Tooltip => $"CPU {_cpuPercent:0}% · 内存 {MemoryUsedPercent():0}%";
 
-    public string? Badge => _badge;
+    public string? Badge => _showBadge ? _badge : null;
 
     public bool BadgeIsAccent => _cpuPercent >= 80;
 
@@ -151,7 +156,7 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
 
         root.Children.Add(new TextBlock
         {
-            Text = $"每 {IntervalSeconds} 秒刷新一次。关掉面板后计时器会停止，不占 CPU。",
+            Text = $"每 {_intervalSeconds} 秒刷新一次。关掉面板后计时器会停止，不占 CPU。",
             FontSize = 11,
             Margin = new Thickness(0, 12, 0, 0),
             TextWrapping = TextWrapping.Wrap,
@@ -220,6 +225,42 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
             "glyph:E9D9");
     }
 
+    // ---------------------------------------------------------------- 设置项（宿主设置窗口里显示）
+
+    public IEnumerable<PluginSettingsSection> GetSettingsSections()
+    {
+        yield return new PluginSettingsSection
+        {
+            Title = "系统监视",
+            Description = "任务栏读数与采样频率",
+            Icon = "emoji:📈",
+            Items = new[]
+            {
+                PluginSettingItem.Number(_context, "IntervalSeconds", "采样间隔", DefaultIntervalSeconds,
+                    1, 30, 1, "秒", "每次采样只是一次 Win32 调用，间隔短也几乎不占 CPU",
+                    () =>
+                    {
+                        _intervalSeconds = Math.Clamp(
+                            _context.GetSetting("IntervalSeconds", DefaultIntervalSeconds), 1, 30);
+                        RestartTimer();
+                        Sample();
+                    }),
+
+                PluginSettingItem.Toggle(_context, "ShowBadge", "图标上显示 CPU 徽标", true,
+                    "关闭后任务栏图标右上角不再显示百分比",
+                    () =>
+                    {
+                        _showBadge = _context.GetSetting("ShowBadge", true);
+                        Sample();
+                    }),
+
+                PluginSettingItem.Button("立即采样一次", Sample, "马上刷新一次读数"),
+                PluginSettingItem.Button("打开任务管理器", () => Launch("taskmgr.exe", null)),
+                PluginSettingItem.Note("数据来自 Win32（GetSystemTimes / GlobalMemoryStatusEx），插件零第三方依赖。"),
+            },
+        };
+    }
+
     // ---------------------------------------------------------------- 采样
 
     private void EnsureTimer()
@@ -231,11 +272,19 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
 
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
-            Interval = TimeSpan.FromSeconds(IntervalSeconds),
+            Interval = TimeSpan.FromSeconds(_intervalSeconds),
         };
 
         _timer.Tick += (_, _) => Sample();
         _timer.Start();
+    }
+
+    /// <summary>采样间隔变化后重建计时器（立即生效）。</summary>
+    private void RestartTimer()
+    {
+        _timer?.Stop();
+        _timer = null;
+        EnsureTimer();
     }
 
     private void StopTimerIfIdle()

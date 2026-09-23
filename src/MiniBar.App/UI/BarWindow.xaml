@@ -164,6 +164,7 @@
                 <ItemsControl x:Name="ItemsHost"
                               ItemsSource="{Binding PinnedItems}"
                               ItemTemplate="{StaticResource BarItemTemplate}"
+                              HorizontalAlignment="Center"
                               VerticalAlignment="Center">
                     <ItemsControl.ItemsPanel>
                         <ItemsPanelTemplate>
@@ -176,6 +177,7 @@
                            Text="把插件 DLL 拖到这里"
                            Margin="8,0"
                            FontSize="12"
+                           HorizontalAlignment="Center"
                            VerticalAlignment="Center"
                            Foreground="{DynamicResource MutedForegroundBrush}"
                            Visibility="{Binding IsEmpty, Converter={StaticResource BoolToVisibility}}" />

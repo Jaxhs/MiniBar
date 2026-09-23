@@ -30,7 +30,7 @@ namespace MiniBar.Plugin.QuickNotes;
     Order = 20,
     DefaultPinned = true)]
 public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelContentPlugin,
-    IContextMenuPlugin, IDropHandlerPlugin, IHotkeyPlugin
+    IContextMenuPlugin, IDropHandlerPlugin, IHotkeyPlugin, ISettingsPlugin
 {
     private static readonly string[] TextExtensions = { ".txt", ".md", ".log", ".markdown", ".csv" };
 
@@ -40,11 +40,13 @@ public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanel
     private TextBlock? _status;
     private DispatcherTimer? _saveTimer;
     private int _lineCount;
+    private double _saveDelaySeconds = 1;
 
     public void Initialize(IPluginContext context)
     {
         _context = context;
         _filePath = Path.Combine(context.DataDirectory, "notes.md");
+        _saveDelaySeconds = Math.Clamp(context.GetSetting("SaveDelaySeconds", 1d), 0.5, 10);
         _lineCount = CountLines(ReadFromDisk());
         context.Logger.Info($"便签数据文件：{_filePath}");
     }
@@ -275,6 +277,48 @@ public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanel
         _context.Shell.OpenPanel(_context.PluginId);
     }
 
+    // ---------------------------------------------------------------- 设置项（宿主设置窗口里显示）
+
+    public IEnumerable<PluginSettingsSection> GetSettingsSections()
+    {
+        yield return new PluginSettingsSection
+        {
+            Title = "便签",
+            Description = "内容自动保存到插件数据目录，不写在宿主配置里",
+            Icon = "emoji:📝",
+            Items = new[]
+            {
+                PluginSettingItem.Number(_context, "SaveDelaySeconds", "自动保存延迟", 1,
+                    0.5, 10, 0.5, "秒", "停止输入多久后落盘；改成 0.5 秒几乎感觉不到延迟",
+                    () =>
+                    {
+                        _saveDelaySeconds = Math.Clamp(_context.GetSetting("SaveDelaySeconds", 1d), 0.5, 10);
+                        _saveTimer?.Stop();
+                        _saveTimer = null;
+                    }),
+
+                PluginSettingItem.Button("立即保存", Flush, "把当前内容立刻写入磁盘"),
+                PluginSettingItem.Button("打开便签文件", () =>
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{_filePath}\"")
+                        {
+                            UseShellExecute = true,
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        _context.Logger.Warn("打开便签文件失败", ex);
+                    }
+                }, "在资源管理器中定位 notes.md"),
+
+                PluginSettingItem.Note($"数据文件：{_filePath}"),
+                PluginSettingItem.Note("把 .txt / .md 文件拖到任务栏上，内容会自动并入便签。"),
+            },
+        };
+    }
+
     // ---------------------------------------------------------------- 内部
 
     private void OnTextChanged(object sender, TextChangedEventArgs e)
@@ -288,7 +332,7 @@ public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanel
         {
             _saveTimer = new DispatcherTimer(DispatcherPriority.Background)
             {
-                Interval = TimeSpan.FromSeconds(1),
+                Interval = TimeSpan.FromSeconds(_saveDelaySeconds),
             };
             _saveTimer.Tick += OnSaveTick;
         }

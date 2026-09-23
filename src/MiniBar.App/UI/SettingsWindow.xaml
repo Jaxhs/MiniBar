@@ -1,0 +1,140 @@
+<Window x:Class="MiniBar.App.UI.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置 - MiniBar"
+        WindowStyle="None"
+        ResizeMode="CanResizeWithGrip"
+        Width="940"
+        Height="640"
+        MinWidth="720"
+        MinHeight="420"
+        ShowInTaskbar="True"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Microsoft YaHei UI, Segoe UI"
+        FontSize="13"
+        Background="{DynamicResource BarBackgroundBrush}"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
+
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="38"
+                      ResizeBorderThickness="6"
+                      CornerRadius="0"
+                      GlassFrameThickness="0"
+                      UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
+
+    <Window.Resources>
+        <Style x:Key="NavItemStyle" TargetType="ListBoxItem">
+            <Setter Property="Margin" Value="0,1" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" CornerRadius="8" Padding="9,7" Background="Transparent">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource HoverBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource ActiveBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <DataTemplate x:Key="NavItemTemplate">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <ContentControl Grid.Column="0"
+                                Content="{Binding Icon}"
+                                ContentTemplate="{StaticResource PluginIconTemplate}"
+                                VerticalAlignment="Center"
+                                Margin="0,0,9,0" />
+
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding Title}" />
+                    <TextBlock Text="{Binding Subtitle}"
+                               FontSize="11"
+                               TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                </StackPanel>
+
+                <Border Grid.Column="2"
+                        Width="6" Height="6" CornerRadius="3"
+                        VerticalAlignment="Center"
+                        Background="{DynamicResource AccentBrush}"
+                        Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibility}}" />
+            </Grid>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" Height="38">
+            <TextBlock Text="设置"
+                       Margin="14,0,0,0"
+                       FontWeight="SemiBold"
+                       VerticalAlignment="Center" />
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        Margin="0,0,5,0"
+                        WindowChrome.IsHitTestVisibleInChrome="True">
+                <Button Style="{StaticResource IconButtonStyle}" Click="OnOpenConfigFolderClick" ToolTip="打开配置目录">
+                    <TextBlock Text="&#xE8A5;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" />
+                </Button>
+                <Button Style="{StaticResource IconButtonStyle}" Click="OnCloseClick" ToolTip="关闭">
+                    <TextBlock Text="&#xE711;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13" />
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <Border Grid.Row="0" Height="1" VerticalAlignment="Bottom" Background="{DynamicResource SeparatorBrush}" />
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="228" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Padding="8,8,4,8"
+                    Background="{DynamicResource SurfaceBrush}"
+                    BorderBrush="{DynamicResource SeparatorBrush}"
+                    BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="宿主设置与插件"
+                               Margin="8,4,0,6"
+                               FontSize="11.5"
+                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                    <ListBox x:Name="NavList"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             ItemContainerStyle="{StaticResource NavItemStyle}"
+                             ItemTemplate="{StaticResource NavItemTemplate}"
+                             SelectionChanged="OnNavSelectionChanged" />
+                </DockPanel>
+            </Border>
+
+            <ScrollViewer Grid.Column="1"
+                          VerticalScrollBarVisibility="Auto"
+                          Style="{StaticResource MiniBarScrollViewerStyle}">
+                <StackPanel x:Name="ContentHost" Margin="18,14,18,22" />
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

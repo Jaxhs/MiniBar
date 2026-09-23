@@ -211,6 +211,11 @@ public static class PluginScanner
             list.Add(PluginCapabilities.DropHandler);
         }
 
+        if (typeof(ISettingsPlugin).IsAssignableFrom(type))
+        {
+            list.Add(PluginCapabilities.Settings);
+        }
+
         return list.ToArray();
     }
 }

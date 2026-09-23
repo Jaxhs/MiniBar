@@ -50,6 +50,7 @@ public static class PluginCapabilities
     public const string ContextMenu = "右键菜单";
     public const string Hotkey = "全局快捷键";
     public const string DropHandler = "拖放处理";
+    public const string Settings = "设置项";
 
     public const string TaskButtonInterface = "MiniBar.Sdk.ITaskButtonPlugin";
     public const string BarWidgetInterface = "MiniBar.Sdk.IBarWidgetPlugin";

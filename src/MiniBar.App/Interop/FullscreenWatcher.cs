@@ -89,6 +89,43 @@ public sealed class FullscreenWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// 接收来自 AppBar 回调的系统级全屏通知（ABN_FULLSCREENAPP）。
+    /// 这是 Shell 主动告诉我们的，比轮询快；但它只在"进入/退出独占全屏"时各来一次，
+    /// 而且无边框全屏窗口的判定仍然是轮询更准，所以两者互补：通知用来抢先，轮询用来校正。
+    /// </summary>
+    public void ReportSystemFullscreen(bool started)
+    {
+        if (started)
+        {
+            if (Current.IsFullscreen)
+            {
+                return;
+            }
+
+            var fg = NativeMethods.GetForegroundWindow();
+            var state = new FullscreenState(true, fg,
+                fg == IntPtr.Zero ? "system" : NativeMethods.GetWindowClass(fg),
+                fg == IntPtr.Zero ? "系统全屏通知" : NativeMethods.GetWindowTitle(fg),
+                false);
+
+            Current = state;
+            AppLog.Info("系统通知：有程序进入全屏");
+            Changed?.Invoke(this, state);
+            return;
+        }
+
+        // 退出全屏：立刻采样校正（可能还有别的全屏程序，交给 Detect 判断）
+        AppLog.Info("系统通知：全屏程序已退出");
+        Poll();
+
+        if (Current.IsFullscreen)
+        {
+            Current = FullscreenState.None;
+            Changed?.Invoke(this, Current);
+        }
+    }
+
     public void Poll()
     {
         var state = Detect();

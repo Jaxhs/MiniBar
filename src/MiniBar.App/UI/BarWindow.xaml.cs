@@ -49,10 +49,19 @@ public partial class BarWindow : Window
 
         DataContext = _vm;
 
-        SourceInitialized += OnSourceInitialized;
+        // 关键：WPF 的 Loaded 有可能早于 SourceInitialized 触发（实测如此），
+        // 那时候还没有 HWND，AppBar 会注册失败、Reposition 也会因为拿不到句柄直接返回。
+        // 所以在构造阶段就把句柄建出来，后续所有逻辑都不再依赖事件顺序。
+        EnsureNativeWindow();
+
+        SourceInitialized += (_, _) => EnsureNativeWindow();
         Loaded += OnLoaded;
         SizeChanged += (_, _) => Reposition();
-        Closed += (_, _) => ReleaseAllWidgets();
+        Closed += (_, _) =>
+        {
+            ReleaseAllWidgets();
+            AppBar.Dispose(); // 退出前注销 AppBar，把屏幕空间还给系统
+        };
 
         _plugins.LayoutChanged += (_, _) => Dispatcher.BeginInvoke(new Action(SyncPlugins));
         _plugins.PluginUnloaded += (_, descriptor) => ReleaseWidget(descriptor.Id);
@@ -74,11 +83,31 @@ public partial class BarWindow : Window
 
     public BarViewModel ViewModel => _vm;
 
-    private HwndSource? _source;
+    /// <summary>AppBar 注册器：注册后本窗口就"像任务栏一样"占住一条屏幕边缘。</summary>
+    public AppBarService AppBar { get; } = new();
 
-    private void OnSourceInitialized(object? sender, EventArgs e)
+    private HwndSource? _source;
+    private bool _nativeWindowReady;
+    private long _lastAppBarSet;
+
+    /// <summary>
+    /// 提前把原生窗口与 AppBar 通道准备好（幂等）。
+    /// 用 EnsureHandle 主动创建 HWND，而不是等 SourceInitialized —— 因为 Loaded 可能先到。
+    /// </summary>
+    private void EnsureNativeWindow()
     {
-        var hwnd = new WindowInteropHelper(this).Handle;
+        if (_nativeWindowReady)
+        {
+            return;
+        }
+
+        var hwnd = new WindowInteropHelper(this).EnsureHandle();
+        if (hwnd == IntPtr.Zero)
+        {
+            return;
+        }
+
+        _nativeWindowReady = true;
 
         // 不进 Alt+Tab、不在系统任务栏出现 —— 我们本身就是“任务栏”，不该再占系统任务栏一格
         WindowDressingService.Apply(this, WindowDressing.TaskBar);
@@ -87,10 +116,38 @@ public partial class BarWindow : Window
 
         _source = HwndSource.FromHwnd(hwnd);
         _source?.AddHook(OnWndProc);
+
+        // AppBar：向系统申请一条边缘空间，之后最大化窗口会自动避开我们
+        AppBar.Attach(hwnd);
+        AppBar.PositionChanged += (_, _) => OnAppBarPositionChanged();
+        AppBar.FullscreenAppChanged += (_, started) => AppServices.Fullscreen?.ReportSystemFullscreen(started);
+    }
+
+    /// <summary>
+    /// Shell 要求重新安排位置。这里必须防回环：我们自己调 ABM_SETPOS 之后，
+    /// Shell 往往紧接着发一次 ABN_POSCHANGED（通知的就是我们自己刚做的事），
+    /// 若无条件响应就会变成"设位置→被通知→再设位置"的死循环，白烧 CPU。
+    /// </summary>
+    private void OnAppBarPositionChanged()
+    {
+        if (Environment.TickCount64 - _lastAppBarSet < 1000)
+        {
+            AppLog.Debug("忽略自身 SETPOS 引起的 AppBar 位置通知");
+            return;
+        }
+
+        Dispatcher.BeginInvoke(new Action(Reposition));
     }
 
     private IntPtr OnWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
+        // Shell 发来的 AppBar 通知（位置变化 / 有程序全屏 / 状态变化）
+        if (AppBar.HandleMessage(msg, wParam, lParam))
+        {
+            handled = true;
+            return IntPtr.Zero;
+        }
+
         // 分辨率 / 缩放 / 显示器拓扑变化后重新贴边
         if (msg is NativeMethods.WM_DISPLAYCHANGE or NativeMethods.WM_DPICHANGED)
         {
@@ -106,6 +163,7 @@ public partial class BarWindow : Window
 
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
+        EnsureNativeWindow();
         ApplySettings();
         Reposition();
 
@@ -121,6 +179,8 @@ public partial class BarWindow : Window
     public void ApplySettings()
     {
         var settings = _settings.Settings;
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var scale = DisplayService.GetScale(hwnd);
 
         _vm.Edge = settings.Edge;
         _vm.ItemsOrientation = settings.Edge is DockEdge.Left or DockEdge.Right
@@ -137,11 +197,51 @@ public partial class BarWindow : Window
         GripButton.Height = vertical ? 30 : double.NaN;
 
         var display = DisplayService.GetByIndex(settings.MonitorIndex);
-        var scale = DisplayService.GetScale(new WindowInteropHelper(this).Handle);
 
-        // SizeToContent 下用 MaxWidth/MaxHeight 约束内容，超出的图标会换行（WrapPanel）
-        MaxWidth = Math.Max(180, (display.WorkArea.Width / scale) - (settings.Margin * 2));
-        MaxHeight = Math.Max(120, (display.WorkArea.Height / scale) - (settings.Margin * 2));
+        // 占用屏幕空间时尽量贴住边缘（薄薄留一点边给投影），悬浮时留出完整投影空间
+        ShellBorder.Margin = settings.UseAppBar
+            ? new Thickness(4, 3, 4, 3)
+            : new Thickness(7);
+
+        if (settings.UseAppBar)
+        {
+            // 占用屏幕空间模式：厚度由设置决定，长度交给系统批给的那条边缘
+            // （注意 MaxWidth 不能设成 NaN —— WPF 会抛 ArgumentException，它的默认值就是 PositiveInfinity）
+            SizeToContent = SizeToContent.Manual;
+            MaxWidth = double.PositiveInfinity;
+            MaxHeight = double.PositiveInfinity;
+
+            if (vertical)
+            {
+                Width = Math.Max(28, settings.AppBarThickness);
+                Height = double.NaN;
+            }
+            else
+            {
+                Height = Math.Max(28, settings.AppBarThickness);
+                Width = double.NaN;
+            }
+        }
+        else
+        {
+            // 悬浮胶囊模式：内容自适应大小，用 MaxWidth/MaxHeight 约束换行
+            SizeToContent = SizeToContent.WidthAndHeight;
+
+            if (!double.IsNaN(Width))
+            {
+                Width = double.NaN;
+            }
+
+            if (!double.IsNaN(Height))
+            {
+                Height = double.NaN;
+            }
+
+            MaxWidth = Math.Max(180, (display.WorkArea.Width / scale) - (settings.Margin * 2));
+            MaxHeight = Math.Max(120, (display.WorkArea.Height / scale) - (settings.Margin * 2));
+        }
+
+        SyncAppBarRegistration();
 
         if (!_shell.IsMiniMode)
         {
@@ -149,6 +249,25 @@ public partial class BarWindow : Window
         }
 
         RefreshMiniIndicator();
+    }
+
+    /// <summary>
+    /// 让 AppBar 的注册状态跟随设置与可见性：
+    /// 只有"要用 AppBar + 正显示着 + 不在迷你模式"时才占住屏幕空间，
+    /// 其余情况一律归还（否则用户桌面上会永久留一条空位）。
+    /// </summary>
+    private void SyncAppBarRegistration()
+    {
+        var shouldRegister = _settings.Settings.UseAppBar && IsVisible && !_shell.IsMiniMode;
+
+        if (shouldRegister && !AppBar.IsRegistered)
+        {
+            AppBar.Register();
+        }
+        else if (!shouldRegister && AppBar.IsRegistered)
+        {
+            AppBar.Unregister();
+        }
     }
 
     /// <summary>把窗口贴回设定的边缘（像素级定位，PerMonitorV2 下最稳）。</summary>
@@ -164,6 +283,54 @@ public partial class BarWindow : Window
         var display = DisplayService.GetByIndex(settings.MonitorIndex);
         var scale = DisplayService.GetScale(hwnd);
 
+        if (AppBar.IsRegistered)
+        {
+            // AppBar 模式：由 Shell 决定我们占哪一条（它会避开系统任务栏与其它 AppBar）
+            var granted = AppBar.SetPosition(
+                settings.Edge,
+                display.Bounds,
+                settings.AppBarThickness * scale,
+                settings.Margin * scale);
+
+            _lastAppBarSet = Environment.TickCount64;
+            if (granted is { Width: > 0, Height: > 0 })
+            {
+                // 长度交给系统批的矩形，厚度用设置值；只在真的不同的时候改，
+                // 否则会触发 SizeChanged → Reposition 的死循环
+                var wantsWidth = granted.Value.Width / scale;
+                var wantsHeight = granted.Value.Height / scale;
+
+                if (_vm.IsVertical)
+                {
+                    if (!double.IsNaN(Width) && Math.Abs(Width - wantsWidth) > 0.5)
+                    {
+                        Width = wantsWidth;
+                    }
+
+                    if (Math.Abs(Height - wantsHeight) > 0.5)
+                    {
+                        Height = wantsHeight;
+                    }
+                }
+                else
+                {
+                    if (!double.IsNaN(Height) && Math.Abs(Height - wantsHeight) > 0.5)
+                    {
+                        Height = wantsHeight;
+                    }
+
+                    if (Math.Abs(Width - wantsWidth) > 0.5)
+                    {
+                        Width = wantsWidth;
+                    }
+                }
+
+                DisplayService.MoveWindow(hwnd, granted.Value.Left, granted.Value.Top, topmost: true);
+                return;
+            }
+        }
+
+        // 悬浮模式：按内容尺寸贴到边缘居中
         var size = new Size(Math.Max(40, ActualWidth) * scale, Math.Max(30, ActualHeight) * scale);
         var rect = DisplayService.ComputeEdgeRect(display, settings.Edge, size, settings.Margin * scale);
 
@@ -212,11 +379,16 @@ public partial class BarWindow : Window
         {
             Show();
             Opacity = _settings.Settings.BarOpacity;
+
+            // 重新占用屏幕空间（隐藏期间已归还）
+            SyncAppBarRegistration();
             Reposition();
             AppServices.Topmost?.Tick();
         }
         else
         {
+            // 隐藏前必须把占用的屏幕空间还给系统，否则桌面上会永久留一条空位
+            AppBar.Unregister();
             Hide();
         }
     }
@@ -671,6 +843,7 @@ public partial class BarWindow : Window
         var settings = _settings.Settings;
         var menu = new ContextMenu { Style = (Style)FindResource("MiniBarContextMenuStyle") };
 
+        menu.Items.Add(MenuBuilder.Item("设置…", () => _shell.ShowSettings(), "glyph:E713", hint: "Ctrl+Alt+S"));
         menu.Items.Add(MenuBuilder.Item("插件管理…", () => _shell.ShowPluginManager(), "glyph:E8FD"));
 
         menu.Items.Add(MenuBuilder.Sep());

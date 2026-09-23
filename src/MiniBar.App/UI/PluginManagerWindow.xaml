@@ -206,6 +206,13 @@
                                             <Button Style="{StaticResource IconButtonStyle}"
                                                     Width="28" Height="28"
                                                     Tag="{Binding}"
+                                                    Click="OnSettingsClick"
+                                                    ToolTip="打开设置（宿主设置 + 插件自己的设置项）">
+                                                <TextBlock Text="&#xE713;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="12" />
+                                            </Button>
+                                            <Button Style="{StaticResource IconButtonStyle}"
+                                                    Width="28" Height="28"
+                                                    Tag="{Binding}"
                                                     Click="OnDeleteClick"
                                                     IsEnabled="{Binding CanDelete}"
                                                     ToolTip="卸载并删除插件文件">

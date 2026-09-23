@@ -33,7 +33,7 @@ namespace MiniBar.Plugin.Clock;
     Order = 0,
     DefaultPinned = true)]
 public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetPlugin,
-    IPanelContentPlugin, ICompactContentPlugin, IContextMenuPlugin, IHotkeyPlugin
+    IPanelContentPlugin, ICompactContentPlugin, IContextMenuPlugin, IHotkeyPlugin, ISettingsPlugin
 {
     private static readonly (string City, string TimeZoneId)[] Cities =
     {
@@ -50,13 +50,16 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
     private TextBlock? _panelDate;
     private TextBlock? _compactText;
     private StackPanel? _cityHost;
-    private bool _showSeconds = true;
+    private string _barFormat = "HH:mm:ss";
+
+    /// <summary>格式里带不带秒 —— 决定刷新频率与控件宽度。</summary>
+    private bool ShowSeconds => _barFormat.Contains("ss", StringComparison.Ordinal);
 
     public void Initialize(IPluginContext context)
     {
         _context = context;
-        _showSeconds = context.GetSetting("ShowSeconds", true);
-        context.Logger.Info("时钟插件已就绪");
+        _barFormat = context.GetSetting("BarFormat", "HH:mm:ss") ?? "HH:mm:ss";
+        context.Logger.Info($"时钟插件已就绪（任务栏格式 {_barFormat}）");
     }
 
     public void Dispose()
@@ -75,13 +78,13 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
 
     public string DisplayName => "时钟";
 
-    public string? Tooltip => _showSeconds ? "含秒的当前时间" : "当前时间";
+    public string? Tooltip => ShowSeconds ? "含秒的当前时间" : "当前时间";
 
     public void OnClick(BarItemClickContext context) => context.TogglePanel();
 
     // ---------------------------------------------------------------- 任务栏内嵌内容
 
-    public double WidgetWidth => _showSeconds ? 84 : 62;
+    public double WidgetWidth => ShowSeconds ? 84 : 62;
 
     public FrameworkElement CreateBarWidget()
     {
@@ -175,7 +178,7 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
 
     public string CompactTitle => "时间";
 
-    public double PreferredCompactWidth => _showSeconds ? 92 : 66;
+    public double PreferredCompactWidth => ShowSeconds ? 92 : 66;
 
     public double PreferredCompactHeight => 26;
 
@@ -218,10 +221,12 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
             }
         }, "glyph:E8C8");
 
-        yield return PluginMenuEntry.Toggle(_showSeconds ? "隐藏秒" : "显示秒", _showSeconds, () =>
+        yield return PluginMenuEntry.Toggle(ShowSeconds ? "任务栏只显示时分" : "任务栏显示秒", ShowSeconds, () =>
         {
-            _showSeconds = !_showSeconds;
-            _context.SetSetting("ShowSeconds", _showSeconds);
+            _barFormat = ShowSeconds ? "HH:mm" : "HH:mm:ss";
+            _context.SetSetting("BarFormat", _barFormat);
+            RestartTimer();
+            UpdateBarText();
             _context.InvalidateBarItem();
         });
 
@@ -260,7 +265,7 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
             // 只显示时分时没必要每秒唤醒
-            Interval = _showSeconds ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(20),
+            Interval = ShowSeconds ? TimeSpan.FromSeconds(1) : TimeSpan.FromSeconds(20),
         };
 
         _timer.Tick += (_, _) =>
@@ -287,9 +292,67 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
         _timer = null;
     }
 
-    private void UpdateBarText() => SetText(_barText, DateTime.Now.ToString(_showSeconds ? "HH:mm:ss" : "HH:mm"));
+    private void UpdateBarText() => SetText(_barText, DateTime.Now.ToString(_barFormat));
 
-    private void UpdateCompactText() => SetText(_compactText, DateTime.Now.ToString("HH:mm"));
+    private void UpdateCompactText() => SetText(_compactText, DateTime.Now.ToString(ShowSeconds ? "HH:mm:ss" : "HH:mm"));
+
+    /// <summary>格式变化后按新频率重建计时器（带秒需要每秒刷新）。</summary>
+    private void RestartTimer()
+    {
+        StopTimer();
+        EnsureTimer();
+    }
+
+    // ---------------------------------------------------------------- 设置项（宿主设置窗口里显示）
+
+    public IEnumerable<PluginSettingsSection> GetSettingsSections()
+    {
+        yield return new PluginSettingsSection
+        {
+            Title = "时钟",
+            Description = "改完立即生效，配置写在插件自己的数据里",
+            Icon = "emoji:🕒",
+            Items = new[]
+            {
+                new PluginSettingItem
+                {
+                    Label = "任务栏时间格式",
+                    Kind = PluginSettingKind.Choice,
+                    Description = "标准 .NET 时间格式字符串；带不带秒同时决定刷新频率",
+                    Choices = new[] { "HH:mm:ss", "HH:mm", "HH:mm:ss ddd", "tt h:mm:ss" },
+                    GetValue = () => _barFormat,
+                    // 手写 GetValue/SetValue 的写法：写配置 + 立刻应用 + 让宿主刷新图标
+                    SetValue = value =>
+                    {
+                        _barFormat = value as string ?? "HH:mm:ss";
+                        _context.SetSetting("BarFormat", _barFormat);
+                        RestartTimer();
+                        UpdateBarText();
+                        UpdateCompactText();
+                        PluginSettingItem.Applied(_context, null);
+                    },
+                },
+
+                PluginSettingItem.Toggle(_context, "PanelShowDate", "面板显示日期", true,
+                    "关闭后世界时钟面板只留时间", () => UpdatePanel()),
+
+                PluginSettingItem.Button("复制当前时间", () =>
+                {
+                    try
+                    {
+                        Clipboard.SetText(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
+                        _context.Shell.Notify("已复制当前时间", NotificationKind.Success);
+                    }
+                    catch (Exception ex)
+                    {
+                        _context.Logger.Warn("复制失败", ex);
+                    }
+                }, "把当前时间（含日期）复制到剪贴板"),
+
+                PluginSettingItem.Note("时区列表内置：北京 / 伦敦 / 纽约 / 东京。"),
+            },
+        };
+    }
 
     private void UpdatePanel()
     {
@@ -300,7 +363,9 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
 
         var now = DateTime.Now;
         SetText(_panelClock, now.ToString("HH:mm:ss"));
-        SetText(_panelDate, now.ToString("yyyy 年 M 月 d 日 dddd"));
+        SetText(_panelDate, _context.GetSetting("PanelShowDate", true)
+            ? now.ToString("yyyy 年 M 月 d 日 dddd")
+            : string.Empty);
 
         if (_cityHost is not null && _cityHost.Children.Count > 0)
         {

@@ -72,6 +72,12 @@ public interface IShellService
 
     /// <summary>打开插件管理器窗口。</summary>
     void ShowPluginManager();
+
+    /// <summary>
+    /// 打开宿主设置窗口。宿主设置与所有插件的设置（<see cref="ISettingsPlugin"/>）都在里面，
+    /// 传 <paramref name="pluginId"/> 可直接定位到某个插件的设置页。
+    /// </summary>
+    void ShowSettings(string pluginId = "");
 }
 
 public sealed class PluginWindowOptions

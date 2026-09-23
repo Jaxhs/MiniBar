@@ -46,6 +46,8 @@ public sealed class PluginDescriptor : ObservableObject
 
     public bool HasTaskButton => Capabilities.Contains(PluginCapabilities.TaskButton);
 
+    public bool HasSettings => Capabilities.Contains(PluginCapabilities.Settings);
+
     public bool HasBarWidget => Capabilities.Contains(PluginCapabilities.BarWidget);
 
     public bool HasPanel => Capabilities.Contains(PluginCapabilities.Panel);
@@ -138,11 +140,13 @@ public sealed class PluginDescriptor : ObservableObject
 
     public bool HasError => !string.IsNullOrEmpty(_error);
 
-    public string StatusText => !IsEnabled
-        ? "已禁用"
-        : HasError ? "出错"
-        : IsLoaded ? "运行中"
-        : "待加载";
+    public string StatusText => IsDuplicate
+        ? "重复文件"
+        : !IsEnabled
+            ? "已禁用"
+            : HasError ? "出错"
+            : IsLoaded ? "运行中"
+            : "待加载";
 
     /// <summary>能力列表的可读文本。</summary>
     public string CapabilityText => Capabilities.Length == 0 ? "无能力声明" : string.Join(" · ", Capabilities);
@@ -187,6 +191,8 @@ public sealed class PluginDescriptor : ObservableObject
     internal PluginContext? Facade { get; set; }
 
     internal ITaskButtonPlugin? TaskButton => Instance as ITaskButtonPlugin;
+
+    internal ISettingsPlugin? Settings => Instance as ISettingsPlugin;
 
     internal IBarWidgetPlugin? BarWidget => Instance as IBarWidgetPlugin;
 

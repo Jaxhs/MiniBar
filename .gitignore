@@ -19,6 +19,11 @@ artifacts/
 packages/
 .nuget/
 
+# ---- 测试输出 ----
+TestResults/
+*.trx
+*.coverage
+
 # ---- 宿主的运行时数据（会写到 %APPDATA%，万一被复制进来也别提交） ----
 settings.json
 plugins.json

@@ -32,6 +32,15 @@ public sealed class AppSettings
     /// <summary>距屏幕工作区边缘的边距（DIP）。</summary>
     public double Margin { get; set; } = 8;
 
+    /// <summary>
+    /// 是否注册为系统 AppBar：像任务栏那样真正占住一条屏幕边缘，
+    /// 其它窗口最大化时会自动避开（这是 Shell 提供的能力，不是靠置顶硬顶）。
+    /// </summary>
+    public bool UseAppBar { get; set; } = true;
+
+    /// <summary>AppBar 模式的厚度（DIP）。只有在 <see cref="UseAppBar"/> 为真时生效。</summary>
+    public double AppBarThickness { get; set; } = 52;
+
     public double BarOpacity { get; set; } = 0.94;
 
     public string Theme { get; set; } = "Light";

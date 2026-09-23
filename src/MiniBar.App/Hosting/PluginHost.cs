@@ -191,7 +191,8 @@ public sealed class PluginHost : IDisposable
 
         var changed = false;
 
-        foreach (var candidate in probed)
+        // 同一个插件 ID 存在多份时，让修改时间更新的那份先合并（先合并者胜出）
+        foreach (var candidate in OrderByNewestPerId(probed))
         {
             changed |= Merge(candidate);
         }
@@ -226,20 +227,37 @@ public sealed class PluginHost : IDisposable
         _store.Save();
     }
 
+    /// <summary>
+    /// 合并一个探测到的插件。
+    /// 冲突处理原则：先发现的那个（扫描顺序固定：内置目录 → 用户目录）保持正常可用，
+    /// 后来者只登记成"重复"并在插件管理器里显示，绝不去动已经正常的那个 ——
+    /// 早期版本这里是反的，导致同一个插件装了两份时全部不加载。
+    /// </summary>
     private bool Merge(PluginCandidate candidate)
     {
-        var existing = Plugins.FirstOrDefault(p => string.Equals(p.Id, candidate.Id, StringComparison.OrdinalIgnoreCase));
+        var existing = Plugins.FirstOrDefault(p =>
+            string.Equals(p.Id, candidate.Id, StringComparison.OrdinalIgnoreCase) && !p.IsDuplicate);
 
         if (existing is not null)
         {
-            if (!string.Equals(existing.FilePath, candidate.FilePath, StringComparison.OrdinalIgnoreCase))
+            // 同一个 DLL 的副本（比如 Debug/Release 两个输出目录各一份）：内容一致就静默忽略
+            if (IsSameContent(existing.FilePath, candidate.FilePath))
             {
-                existing.IsDuplicate = true;
-                existing.Error = $"插件 ID 与 {existing.FilePath} 重复，已忽略本文件";
-                AppLog.Warn($"插件 ID 冲突：{candidate.Id} 同时出现在 {existing.FilePath} 和 {candidate.FilePath}");
+                AppLog.Info($"忽略内容相同的重复副本：{candidate.Id}（{candidate.FilePath}）");
+                return false;
             }
 
-            return false;
+            var duplicate = new PluginDescriptor(candidate)
+            {
+                IsEnabled = false,
+                IsDuplicate = true,
+                Error = $"插件 ID 与已加载的 {existing.FilePath} 冲突，本文件未被加载",
+            };
+
+            Plugins.Add(duplicate);
+            AppLog.Warn($"插件 ID 冲突：{candidate.Id} 同时存在于 {existing.FilePath} 与 {candidate.FilePath}；" +
+                        "保留先发现的，另一个标为重复。删掉多余的那份即可消除此提示。");
+            return true;
         }
 
         var descriptor = new PluginDescriptor(candidate);
@@ -254,9 +272,60 @@ public sealed class PluginHost : IDisposable
         return true;
     }
 
+    /// <summary>同一插件 ID 的多份文件里，按修改时间新的优先排序；各 ID 之间维持原有顺序。</summary>
+    private static IEnumerable<PluginCandidate> OrderByNewestPerId(IEnumerable<PluginCandidate> candidates)
+    {
+        foreach (var group in candidates.GroupBy(c => c.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (var candidate in group.OrderByDescending(c => GetLastWriteTimeUtc(c.FilePath)))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static DateTime GetLastWriteTimeUtc(string path)
+    {
+        try
+        {
+            return File.GetLastWriteTimeUtc(path);
+        }
+        catch
+        {
+            return DateTime.MinValue;
+        }
+    }
+
+    /// <summary>文件名 + 长度 + 修改时间都一致，就认为两份文件是同一个 DLL 的副本。</summary>
+    private static bool IsSameContent(string left, string right)
+    {
+        try
+        {
+            if (string.Equals(left, right, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!File.Exists(left) || !File.Exists(right) ||
+                !string.Equals(Path.GetFileName(left), Path.GetFileName(right), StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            var a = new FileInfo(left);
+            var b = new FileInfo(right);
+            return a.Length == b.Length && a.LastWriteTimeUtc == b.LastWriteTimeUtc;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private void NormalizeOrder()
     {
-        var ordered = Plugins.OrderBy(p => p.Order).ToArray();
+        // 重复项不参与排序，也别去动共享的持久化状态
+        var ordered = Plugins.Where(p => !p.IsDuplicate).OrderBy(p => p.Order).ToArray();
         for (var i = 0; i < ordered.Length; i++)
         {
             if (ordered[i].Order != i)
@@ -267,6 +336,12 @@ public sealed class PluginHost : IDisposable
                     state.Order = i;
                 }
             }
+        }
+
+        var tail = ordered.Length;
+        foreach (var duplicate in Plugins.Where(p => p.IsDuplicate))
+        {
+            duplicate.Order = tail++;
         }
     }
 
@@ -469,7 +544,11 @@ public sealed class PluginHost : IDisposable
         TryRemovePluginFolder(path);
 
         // 状态记录一并移除（下次放回该 DLL 会当作新插件，默认固定）
-        TryDropState(descriptor.Id);
+        // 但被删的是"重复文件"时不能动：那份状态属于真正加载着的那一个
+        if (!descriptor.IsDuplicate)
+        {
+            TryDropState(descriptor.Id);
+        }
 
         return ok;
     }
@@ -593,11 +672,29 @@ public sealed class PluginHost : IDisposable
             return null;
         }
 
-        var known = Plugins.FirstOrDefault(p => string.Equals(p.Id, candidate.Id, StringComparison.OrdinalIgnoreCase));
-        if (known is not null && !string.Equals(known.FilePath, candidate.FilePath, StringComparison.OrdinalIgnoreCase))
+        // 同一个插件 ID 已经存在？比较修改时间，更新的那份胜出 —— 于是"拖入新版本 DLL"就是一次替换
+        var known = Plugins.FirstOrDefault(p =>
+            string.Equals(p.Id, candidate.Id, StringComparison.OrdinalIgnoreCase) && !p.IsDuplicate);
+
+        if (known is not null)
         {
-            message = $"插件 ID「{candidate.Id}」已由 {Path.GetFileName(known.FilePath)} 提供";
-            return null;
+            if (IsSameContent(known.FilePath, candidate.FilePath))
+            {
+                message = $"内容相同，插件已在运行：{known.DisplayName}";
+                return known.Id;
+            }
+
+            if (File.GetLastWriteTimeUtc(candidate.FilePath) <= File.GetLastWriteTimeUtc(known.FilePath))
+            {
+                message = $"插件 ID「{candidate.Id}」已由更新的 {Path.GetFileName(known.FilePath)} 提供，本次文件未加载";
+                return null;
+            }
+
+            AppLog.Info($"插件 {candidate.Id} 检测到更新的文件，替换旧版本：{known.FilePath} -> {candidate.FilePath}");
+
+            // 先彻底卸载旧实例，再让下面的 Merge 接上新的 —— 固定顺序/启用状态都按 ID 保留
+            Unload(known, deleteFile: false);
+            Plugins.Remove(known);
         }
 
         Merge(candidate);
