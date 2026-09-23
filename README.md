@@ -13,13 +13,13 @@
 | **像任务栏一样占据一定的屏幕空间** | `Interop/AppBarService.cs` | 用 Shell 的 `SHAppBarMessage`（`ABM_NEW`/`ABM_QUERYPOS`/`ABM_SETPOS`/`ABM_REMOVE`）注册成系统 AppBar —— 和系统任务栏是同一套机制。注册后 Windows 会把**屏幕工作区**让出一条（实测 1920×1080 上工作区高度 1042 → 967），其它窗口最大化时会自动避开，不是靠置顶硬顶。隐藏/进迷你模式/退出前一定会 `ABM_REMOVE` 把空间还回去。也可以在设置里关掉，退回悬浮胶囊模式 |
 | 常驻显示，其他窗口最大化时不遮挡 | 同上 + `Interop/TopmostGuard.cs` | AppBar 保证工作区不被覆盖；再叠一层 `TOPMOST` + 每 3 秒重申，防止被别的置顶窗口/安装器挤下去 |
 | 其他程序全屏时自动转为迷你窗口，显示指定插件的内容 | `Interop/FullscreenWatcher.cs`、`UI/MiniWindow.xaml` | 两条腿：① AppBar 的 `ABN_FULLSCREENAPP` 系统通知（立即响应）② 700ms 轮询前台窗口矩形是否铺满整块显示器（校正，含无边框全屏）+ `SHQueryUserNotificationState` 兜底。进入时隐藏任务栏并归还空间，迷你窗口带 `WS_EX_NOACTIVATE`：点它不会把全屏程序切走 |
-| **宿主设置界面，可读取插件的设置** | `UI/SettingsWindow.xaml`、`Services/HostSettingsProvider.cs`、`MiniBar.Sdk/ISettingsPlugin` | 左侧是「宿主设置 + 每个插件」的导航，右侧渲染 `PluginSettingsSection` 卡片。插件实现 `ISettingsPlugin` 就能把自己的设置项挂上来（文本/开关/数值/下拉/路径选择/按钮/说明），宿主负责渲染与读写并即时生效；**宿主自己的设置用的是同一套模型**，所以两边长得完全一样。入口：`Ctrl+Alt+,` / 右键任务栏 → 设置… / `Ctrl+Alt+P` 插件管理器里每个插件的齿轮按钮 |
+| **宿主设置界面，可读取插件的设置** | `UI/SettingsWindow.xaml`、`Services/HostSettingsProvider.cs`、`MiniBar.Sdk/ISettingsPlugin` | 左侧是「宿主设置 + 每个插件」的导航，右侧渲染 `PluginSettingsSection` 卡片。插件实现 `ISettingsPlugin` 就能把自己的设置项挂上来（文本/开关/数值/下拉/路径选择/按钮/说明），宿主负责渲染与读写并即时生效；**宿主自己的设置用的是同一套模型**，所以两边长得完全一样。入口：`Ctrl+Alt+,` / 右键任务栏 → 设置… / `Ctrl+Alt+P` 直接打开「插件管理」页；每个插件在左侧导航里都有自己的设置页 |
 | 插件图标像任务栏任务图标一样显示 | `UI/BarWindow.xaml(.cs)`、`ViewModels/BarViewModel.cs` | `ItemsControl` + `WrapPanel`，支持 4 条屏幕边缘（底/顶/左/右）自动换向 |
 | 可固定、排序 | `Hosting/PluginHost.cs`、`Hosting/PluginStateStore.cs` | 固定顺序持久化在 `plugins.json`；拖拽图标实时重排，松手即保存 |
 | 打开关闭界面 | `UI/FlyoutWindow.xaml`、`ShellService.OpenPanel/TogglePanel` | 点图标切换该插件的面板（任务栏式语义）；面板内容在关闭时立即释放 |
-| DLL 热插拔（加载/禁用/删除） | `Hosting/PluginLoadContext.cs`、`PluginHost.cs`、`PluginScanner.cs` | 每个插件一个可回收 `AssemblyLoadContext`；程序集**按字节流加载**，不锁文件，卸载后立刻可删。同一插件装了两份时按修改时间新的胜出，另一份标记为"重复文件"并在插件管理器里可一键删除 |
+| DLL 热插拔（加载/禁用/删除） | `Hosting/PluginLoadContext.cs`、`PluginHost.cs`、`PluginScanner.cs` | 每个插件一个可回收 `AssemblyLoadContext`；程序集**按字节流加载**，不锁文件，卸载后立刻可删。同一插件装了两份时按修改时间新的胜出，另一份标记为"重复文件"并在设置窗口的「插件管理」页里可一键删除 |
 | 在显示区域显示自定义内容 | `MiniBar.Sdk/IBarWidgetPlugin` | 插件可以把任意 WPF 元素直接嵌进任务栏（示例：时钟读数、CPU/内存读数） |
-| 在右键菜单中添加项 | `MiniBar.Sdk/IContextMenuPlugin` | 可挂到「任务栏空白处 / 图标上 / 迷你窗口 / 插件管理器」四个位置 |
+| 在右键菜单中添加项 | `MiniBar.Sdk/IContextMenuPlugin` | 可挂到「任务栏空白处 / 图标上 / 迷你窗口 / 插件管理页」四个位置 |
 | 响应快捷键执行命令 | `MiniBar.Sdk/IHotkeyPlugin`、`Interop/HotkeyManager.cs` | 宿主统一 `RegisterHotKey`，冲突自动回传插件 |
 | 插件可出现在任意位置 | `IShellService.CreateWindow`、`IContextMenuPlugin`、`IBarWidgetPlugin`、`ISettingsPlugin` | 面板 / 迷你窗口 / 浮窗 / 任意菜单位置 / 设置页面，全部由插件声明 |
 | 拖拽文件或文件夹到程序上操作 | `BarWindow.OnFileDrop`、`MiniWindow`、`PluginManagerWindow`、`ShellService.HandleDrop` | 先问被拖到图标上的插件 → 再按顺序问其它拖放插件 → 都没人处理则走内置兜底 |
@@ -50,7 +50,8 @@ src/MiniBar.App/bin/Debug/MiniBar.exe
 | --- | --- |
 | `{程序目录}\Plugins` | 随程序分发的内置插件 |
 | `%LOCALAPPDATA%\MiniBar\Plugins` | 用户插件目录，往这里丢 DLL 就会被自动发现（始终可写） |
-| 直接拖拽 | 把 DLL 拖到任务栏 / 迷你窗口 / 插件管理器上 |
+| 直接拖拽 | 把 DLL 拖到任务栏 / 迷你窗口 / 设置窗口的「插件管理」页上 |
+| 从文件选择 | 设置窗口 → 插件管理 → 「从文件加载…」 |
 
 配置与数据：`%APPDATA%\MiniBar\`（`settings.json`、`plugins.json`、`data\{插件ID}\`、`logs\minibar.log`）。
 
@@ -72,6 +73,7 @@ src/MiniBar.App/bin/Debug/MiniBar.exe
 | 8 | `src/MiniBar.App/UI/FlyoutWindow.xaml.cs` | 面板浮层：为什么"失去焦点就关"要有例外，尺寸上限怎么算 |
 | 9 | `src/MiniBar.App/UI/SettingsWindow.xaml.cs`、`Services/HostSettingsProvider.cs` | 一套 UI 同时渲染"宿主设置"和"插件设置"的做法 |
 | 10 | `plugins/MiniBar.Plugin.SedentaryReminder/` | 一个功能完整的插件范例（7 种能力都用上了，注释非常啰嗦） |
+| 11 | [docs/新手上路-类与API速查.md](docs/新手上路-类与API速查.md) | **看不懂的类来这儿查**：`NamedPipeServerStream`、`AssemblyLoadContext`、`HwndSource`、`SHAppBarMessage`、`DynamicResource`…… 每个都写了"是什么 / 为什么用它 / 怎么用 / 坑在哪" |
 
 几个"踩过的坑"都写在对应文件的注释里，遇到看不懂的地方可以搜关键字：
 `Loaded 早于 SourceInitialized`、`白底白字`、`ClickHandled`、`ABM_REMOVE`、`防回环`。
@@ -92,7 +94,7 @@ MiniBar.sln
 │   ├─ Hosting/                插件发现 / 加载 / 卸载 / 状态持久化 ← 热插拔核心
 │   ├─ Interop/                置顶、全屏检测、全局热键、显示器、工作集裁剪
 │   ├─ Services/               面板与迷你模式编排、主题、单实例、日志
-│   ├─ UI/                     任务栏窗口、浮层、迷你窗口、通知、浮窗、插件管理器、主题
+│   ├─ UI/                     任务栏窗口、浮层、迷你窗口、通知、浮窗、设置窗口（含插件管理页）、主题
 │   └─ ViewModels/
 └─ plugins/                    5 个示例插件，同时也是开发范例
     ├─ MiniBar.Plugin.Clock          全部 7 种能力都用到（含 4 时区面板）
@@ -220,7 +222,7 @@ public sealed class FirstPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelConte
 | `Ctrl+Alt+,` | 打开设置窗口（宿主设置 + 所有插件的设置） |
 | `Ctrl+Alt+B` | 打开 / 关闭久坐提醒面板（示例插件注册的） |
 | `Ctrl+Alt+H` | 显示 / 隐藏任务栏 |
-| `Ctrl+Alt+P` | 打开插件管理器 |
+| `Ctrl+Alt+P` | 打开设置窗口的「插件管理」页（加载 / 启用 / 卸载 / 删除） |
 | `Ctrl+Alt+T` / `Ctrl+Alt+N` | 示例插件注册的快捷键（时钟 / 便签） |
 | `Ctrl+Alt+1~5` | 示例插件「快捷启动」的第 N 项 |
 

@@ -45,7 +45,8 @@ public static class AppServices
 }
 
 /// <summary>
-/// 单个插件的运行上下文实现。插件只能通过它触达宿主，宿主也只通过它回调插件 —— 双向边界清晰。
+/// 单个插件的运行上下文实现（IPluginContext）。它是“插件 ↔ 宿主”的双向边界：插件只通过它触达宿主
+/// （Shell/Logger/设置/目录），宿主也只通过它在合适的线程回调插件（主题变化）。内部用 Facade 模式把宿主的复杂对象图挡在外面。
 /// </summary>
 internal sealed class PluginContext : IPluginContext, IDisposable
 {
@@ -92,14 +93,18 @@ internal sealed class PluginContext : IPluginContext, IDisposable
 
     public event EventHandler? ThemeChanged;
 
+    /// <summary>插件通知宿主“我的图标/徽标变了”：转给 PluginHost.InvalidateBarItem 做合并刷新。</summary>
     public void InvalidateBarItem() => _host.InvalidateBarItem(_descriptor);
 
+    /// <summary>读插件自己的设置（按插件 ID 隔离命名空间，不同插件不会串设置）。泛型 T 自动（反）序列化。</summary>
     public T? GetSetting<T>(string key, T? defaultValue = default) =>
         AppServices.Settings.GetPluginSetting(_descriptor.Id, key, defaultValue);
 
+    /// <summary>写插件自己的设置，并落盘（持久化到该插件的设置区）。</summary>
     public void SetSetting<T>(string key, T? value) =>
         AppServices.Settings.SetPluginSetting(_descriptor.Id, key, value);
 
+    /// <summary>让插件开一个独立浮窗（FloatingWindow），返回 IPluginWindow 供插件后续控制关闭/移动。</summary>
     public IPluginWindow CreateWindow(string title, FrameworkElement content, PluginWindowOptions? options = null) =>
         AppServices.Shell.CreateWindow(title, content, options);
 

@@ -12,10 +12,16 @@ public static class MenuBuilder
 {
     private static DataTemplate? _iconTemplate;
 
+    // DataTemplate：描述“某类数据该怎么画成 UI”的模板。这里 PluginIconTemplate 告诉 WPF 怎么把 PluginIcon 画成图标。
+    // 用延迟加载(??=)：第一次访问才去资源里找，找不到就缓存 null（之后不再找）。
     private static DataTemplate? IconTemplate => _iconTemplate ??=
         Application.Current?.TryFindResource("PluginIconTemplate") as DataTemplate;
 
-    /// <summary>宿主自建菜单项：文字 + 可选字形图标 + 可选快捷键提示。</summary>
+    /// <summary>
+    /// 宿主自己用的菜单项构造器：文字 + 可选字形图标(glyph) + 可选快捷键提示(hint，存在 Tag 上)。
+    /// Action 是“点击要执行的事”（.NET 里的无返回值委托）；传 null 表示只是个展示项/由别处处理。
+    /// isCheckable/isChecked 控制是否显示勾选态。统一套 MiniBarMenuItemStyle 保证外观一致。
+    /// </summary>
     public static MenuItem Item(string header, Action? action, string? glyph = null, string? hint = null,
         bool isEnabled = true, bool isChecked = false, bool isCheckable = false)
     {
@@ -50,9 +56,17 @@ public static class MenuBuilder
         return item;
     }
 
+    /// <summary>生成一条分隔线(Separator)。菜单项之间用来分组。</summary>
     public static Separator Sep() => new();
 
-    /// <summary>转换插件菜单项（包含子菜单与分隔线），自动合并连续分隔线。</summary>
+    /// <summary>
+    /// 把插件返回的一整组 PluginMenuEntry 转成 WPF 菜单对象(IEnumerable&lt;object&gt;，元素是 MenuItem/Separator)。
+    /// 处理细节：
+    ///   - 跳过 null 项；
+    ///   - 自动合并连续的分隔线（中间多个 Sep 只留一个），并丢弃开头/结尾多余的分隔线；
+    ///   - invoke 是“点击某菜单项时回调通知宿主去执行插件逻辑”的委托（因为插件逻辑在别的 DLL 里，宿主代为触发）。
+    /// 返回 IEnumerable 而不是 List，是因为调用方直接 foreach 加进菜单，延迟转换即可，不必先全建出来。
+    /// </summary>
     public static IEnumerable<object> Convert(IEnumerable<PluginMenuEntry> entries, Action<PluginMenuEntry> invoke)
     {
         var result = new List<object>();
@@ -88,6 +102,10 @@ public static class MenuBuilder
         return result;
     }
 
+    /// <summary>
+    /// 把单个 PluginMenuEntry 转成一个 MenuItem。
+    /// 有子项(Children)就递归 Convert 挂成子菜单；没有子项但有 Invoke 就绑点击回调。勾选态/图标/提示都照搬到 MenuItem。
+    /// </summary>
     private static MenuItem ConvertOne(PluginMenuEntry entry, Action<PluginMenuEntry> invoke)
     {
         var item = new MenuItem
@@ -124,7 +142,12 @@ public static class MenuBuilder
         return item;
     }
 
-    /// <summary>图标统一交给 PluginIconTemplate 渲染，字符串/图片两种形态都不用额外分支。</summary>
+    /// <summary>
+    /// 把图标(PluginIcon，可能是字形字符串或图片)包成一个 ContentControl 交给数据模板渲染。
+    /// 为什么套 ContentControl：WPF 的 DataTemplate(这里是 PluginIconTemplate) 需要一个“内容载体”来套用，
+    /// 把 icon 设为 Content、ContentTemplate 指向 IconTemplate，模板就会按 icon 的形态画出字形或图片，
+    /// 调用方（宿主菜单/插件菜单）不用各自写一遍图标绘制逻辑。
+    /// </summary>
     private static FrameworkElement BuildIcon(PluginIcon icon) => new ContentControl
     {
         Content = icon,
@@ -132,6 +155,10 @@ public static class MenuBuilder
         Focusable = false,
     };
 
+    /// <summary>
+    /// 从应用资源里取菜单项样式(MiniBarMenuItemStyle)。
+    /// 用 TryFindResource 而不是 FindResource：找不到时返回 null 而不是抛异常，样式缺失时菜单项退化为默认外观也不崩。
+    /// </summary>
     private static Style? ResolveMenuStyle() =>
         Application.Current?.TryFindResource("MiniBarMenuItemStyle") as Style;
 }

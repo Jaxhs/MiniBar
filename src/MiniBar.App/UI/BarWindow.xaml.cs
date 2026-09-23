@@ -27,18 +27,34 @@ namespace MiniBar.App.UI;
 /// </summary>
 public partial class BarWindow : Window
 {
-    private readonly SettingsService _settings;
-    private readonly PluginHost _plugins;
-    private readonly ShellService _shell;
+    // 三个核心服务都通过构造函数注入（依赖注入）：
+    private readonly SettingsService _settings;   // 读取/保存用户设置（停靠边、透明度、是否用 AppBar 等）
+    private readonly PluginHost _plugins;         // 插件宿主：固定、排序、加载/卸载、热插拔
+    private readonly ShellService _shell;         // 对外门面：开关面板、迷你模式、通知、拖放分发
 
+    // 主窗口自己的视图模型（MVVM）。ItemsControl 直接绑定它的集合来显示任务图标。
     private readonly BarViewModel _vm = new();
+    // 插件“内嵌内容(widget)”缓存：key=插件Id，value=插件返回的可视元素。
+    // 用缓存让同一插件只创建一次，避免每次布局都重建；插件卸载时从这里面移除并释放。
     private readonly Dictionary<string, FrameworkElement> _widgets = new(StringComparer.OrdinalIgnoreCase);
 
-    private PluginDescriptor? _pressItem;
-    private Point _pressPoint;
-    private bool _dragging;
-    private bool _suppressNextClick;
+    // —— 鼠标交互用的临时状态（一次“按下→移动→抬起”周期内有效）——
+    private PluginDescriptor? _pressItem;   // 当前按下的那个任务图标对应的插件
+    private Point _pressPoint;              // 按下时的鼠标坐标（用来判断是否超过拖拽阈值）
+    private bool _dragging;                 // 是否已进入拖拽排序模式
+    private bool _suppressNextClick;        // 刚结束拖拽，要吃掉紧接着的 Click，避免又触发“打开面板”
 
+    /// <summary>
+    /// 构造函数：完成所有初始化装配。
+    /// 步骤：
+    ///   1) 保存注入的服务，加载 XAML（InitializeComponent），把 DataContext 设为 _vm；
+    ///   2) 关键：在构造阶段就主动建出原生窗口句柄（EnsureNativeWindow），不能等 SourceInitialized，
+    ///      因为 WPF 的 Loaded 可能比 SourceInitialized 先触发，那时还没 HWND，AppBar 注册会静默失败；
+    ///   3) 挂各种事件：加载完成、尺寸变化、关闭、插件布局变化、鼠标（按下/移动/抬起/右键）、文件拖放；
+    ///   4) 首次同步插件列表（SyncPlugins）。
+    /// 注意：这里只做“装配”，真正的定位/设置应用放到 OnLoaded/ApplySettings/Reposition 里，
+    /// 因为那时布局已经算好，拿到的尺寸才正确。
+    /// </summary>
     public BarWindow(SettingsService settings, PluginHost plugins, ShellService shell)
     {
         _settings = settings;
@@ -81,18 +97,35 @@ public partial class BarWindow : Window
         SyncPlugins();
     }
 
+    /// <summary>对外暴露视图模型，方便其它模块（如设置页、插件代码）读取任务栏当前状态。</summary>
     public BarViewModel ViewModel => _vm;
 
     /// <summary>AppBar 注册器：注册后本窗口就"像任务栏一样"占住一条屏幕边缘。</summary>
     public AppBarService AppBar { get; } = new();
 
+    // HwndSource：WPF 里“把托管窗口接到 Win32 原生消息循环”的桥。
+    // 通过它我们能挂钩子接收原生窗口消息（AppBar 回调、分辨率/缩放变化等）。
     private HwndSource? _source;
-    private bool _nativeWindowReady;
-    private long _lastAppBarSet;
+    private bool _nativeWindowReady;       // EnsureNativeWindow 是否已完成（保证只执行一次，幂等）
+    private long _lastAppBarSet;           // 最近一次自己调用 ABM_SETPOS 的时间戳（用于 AppBar 防回环）
 
     /// <summary>
-    /// 提前把原生窗口与 AppBar 通道准备好（幂等）。
-    /// 用 EnsureHandle 主动创建 HWND，而不是等 SourceInitialized —— 因为 Loaded 可能先到。
+    /// 提前把原生窗口与 AppBar 通道准备好（幂等：被多处调用也只执行一次）。
+    ///
+    /// 为什么必须在构造阶段调用：
+    ///   WPF 的窗口句柄(HWND)平时是“懒创建”的——要等到窗口真正开始显示、SourceInitialized 触发后才会有。
+    ///   但实测 Loaded 事件可能比 SourceInitialized 还早到约 177ms，那时 HWND 还是 IntPtr.Zero。
+    ///   如果 AppBar 注册、首次 Reposition 等到 SourceInitialized 才做，就会因为拿不到 HWND 而静默失败
+    ///   （注册不上去、定位函数直接 return），表现就是“任务栏不贴边 / 最大化窗口盖住我们”。
+    ///   所以这里用 WindowInteropHelper.EnsureHandle() 主动、提前把 HWND 建出来。
+    ///
+    /// 步骤：
+    ///   1) 幂等判断：已经建过就直接返回；
+    ///   2) EnsureHandle() 强制创建 HWND（WindowInteropHelper 是 WPF 用来访问底层 HWND 的帮手类）；
+    ///   3) 套用“任务栏”样式：不进 Alt+Tab、不占系统任务栏（WS_EX_TOOLWINDOW 那一类）；
+    ///   4) 让全屏检测忽略本窗口（否则自己会误判成全屏）；
+    ///   5) HwndSource.FromHwnd 拿到消息桥，AddHook 挂上 OnWndProc 接收原生消息；
+    ///   6) AppBar.Attach 接管 HWND，之后注册/定位都走 AppBar 服务；订阅它的位置变化与全屏回调。
     /// </summary>
     private void EnsureNativeWindow()
     {
@@ -101,6 +134,8 @@ public partial class BarWindow : Window
             return;
         }
 
+        // WindowInteropHelper：WPF 的 Window 与 Win32 HWND 之间的“翻译官”。
+        // EnsureHandle()：不等系统默认时机，现在就创建并返回 HWND（IntPtr）。
         var hwnd = new WindowInteropHelper(this).EnsureHandle();
         if (hwnd == IntPtr.Zero)
         {
@@ -114,6 +149,8 @@ public partial class BarWindow : Window
 
         AppServices.Fullscreen?.IgnoreWindow(hwnd);
 
+        // HwndSource：把 HWND 包成能收 WPF/Win32 消息的对象；AddHook 注册一个回调(HwndSourceHook)，
+        // 以后这个窗口收到的每一条原生消息都会先经过 OnWndProc。
         _source = HwndSource.FromHwnd(hwnd);
         _source?.AddHook(OnWndProc);
 
@@ -136,9 +173,20 @@ public partial class BarWindow : Window
             return;
         }
 
+        // Dispatcher.BeginInvoke：把 Reposition 抛回 UI 线程的“下一帧”执行（默认 DispatcherPriority.Normal）。
+        // 因为 AppBar 通知来自原生消息线程，而改 WPF 布局必须在 UI 线程；BeginInvoke 还能合并/延后，避免同一时刻连环重排。
         Dispatcher.BeginInvoke(new Action(Reposition));
     }
 
+    /// <summary>
+    /// 原生窗口消息钩子（HwndSourceHook 签名）。窗口收到的每一条 Win32 消息都会先到这里。
+    /// 我们在这里接三类系统通知：
+    ///   1) AppBar 回调：Shell 告诉我们要改位置 / 有全屏程序 / 状态变化（交给 AppBar.HandleMessage）；
+    ///   2) WM_DISPLAYCHANGE / WM_DPICHANGED：分辨率或系统缩放变了，要重新读取设置并贴边；
+    ///   3) 其它消息原样放过。
+    /// 收到后通常用 Dispatcher.BeginInvoke 把处理“抛回 UI 线程的下一帧”再执行，
+    /// 因为消息可能来自非 UI 线程，而改 WPF 属性必须在 UI 线程。
+    /// </summary>
     private IntPtr OnWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         // Shell 发来的 AppBar 通知（位置变化 / 有程序全屏 / 状态变化）
@@ -151,6 +199,7 @@ public partial class BarWindow : Window
         // 分辨率 / 缩放 / 显示器拓扑变化后重新贴边
         if (msg is NativeMethods.WM_DISPLAYCHANGE or NativeMethods.WM_DPICHANGED)
         {
+            // 同样抛回 UI 线程，避免在原生消息回调里直接改 WPF 属性（会跨线程异常）。
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 ApplySettings();
@@ -161,6 +210,11 @@ public partial class BarWindow : Window
         return IntPtr.Zero;
     }
 
+    /// <summary>
+    /// 窗口真正加载完成（布局已算好、HWND 已确定）后调用。
+    /// 此时才安全地应用设置、贴边定位、同步插件，最后再显示出来，
+    /// 避免窗口在 (0,0) 闪一下再跳到目标位置。
+    /// </summary>
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         EnsureNativeWindow();
@@ -337,7 +391,7 @@ public partial class BarWindow : Window
         DisplayService.MoveWindow(hwnd, rect.Left, rect.Top, topmost: true);
     }
 
-    /// <summary>窗口当前的屏幕像素矩形（浮层定位用）。</summary>
+    /// <summary>窗口当前的屏幕像素矩形（浮层定位用）。Rect 是“左上角+宽高”的矩形结构，单位=物理像素。</summary>
     public Rect GetPixelRect() => DisplayService.GetWindowRect(new WindowInteropHelper(this).Handle);
 
     /// <summary>某个任务图标的屏幕像素矩形；找不到时返回 null。</summary>
@@ -350,6 +404,8 @@ public partial class BarWindow : Window
                 continue;
             }
 
+            // ItemContainerGenerator：ItemsControl 把“数据项”变成“可视容器(ContentPresenter)”的工厂。
+            // ContainerFromIndex 拿第 i 个图标对应的那个可视容器，才能进一步算它的屏幕位置。
             if (ItemsHost.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement container)
             {
                 return null;
@@ -359,7 +415,9 @@ public partial class BarWindow : Window
             {
                 var hwnd = new WindowInteropHelper(this).Handle;
                 var scale = DisplayService.GetScale(hwnd);
+                // PointToScreen：把控件本地坐标(0,0 左上角)换算成屏幕坐标。
                 var origin = container.PointToScreen(new Point(0, 0));
+                // 容器尺寸是 WPF 单位，乘以缩放比得到物理像素，组合成屏幕矩形。
                 return new Rect(origin.X, origin.Y, container.ActualWidth * scale, container.ActualHeight * scale);
             }
             catch
@@ -371,8 +429,17 @@ public partial class BarWindow : Window
         return null;
     }
 
+    /// <summary>
+    /// 取当前窗口所在显示器的 DPI 缩放比（例如 150% 缩放返回 1.5）。
+    /// 很多 Win32 坐标/尺寸是“物理像素”，而 WPF 内部用“与设备无关的单位(96DPI 基准)”，
+    /// 两者换算时要乘/除这个比值，否则在高缩放屏上定位会偏移。
+    /// </summary>
     public double GetDpiScale() => DisplayService.GetScale(new WindowInteropHelper(this).Handle);
 
+    /// <summary>
+    /// 显隐任务栏。显示时重新注册 AppBar 占用屏幕空间、重新贴边；隐藏时必须 ABM_REMOVE 把空间还给系统，
+    /// 否则桌面上会永久留一条我们占着的空位（别的窗口最大化也绕开它）。
+    /// </summary>
     public void SetBarVisible(bool visible)
     {
         if (visible)
@@ -393,6 +460,9 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 刷新“是否处于迷你模式”的小指示（把手上的提示文字会变化），让用户一眼看出当前状态。
+    /// </summary>
     public void RefreshMiniIndicator()
     {
         _vm.MiniIndicatorVisible = _shell.IsMiniMode;
@@ -456,6 +526,11 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 某个任务图标容器(ContentPresenter)布局完成（Loaded）后触发。
+    /// 此时 DataTemplate 已应用、WidgetHost 已经存在，可以安全地把插件内嵌内容挂上去。
+    /// 只挂一次：进来就取消订阅自身，避免重复挂载。
+    /// </summary>
     private void OnContainerLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement container)
@@ -489,6 +564,12 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 在视觉树里按名字查找某个后代元素（泛型 T，必须是 FrameworkElement）。
+    /// 用来在任务图标模板里找到名为 "WidgetHost" 的 ContentControl（插件内嵌内容的落点）。
+    /// 用 VisualTreeHelper 递归遍历：先从子节点数往下走，命中名字与类型就返回，否则继续往更深一层找。
+    /// 不这么做就只能靠 x:Name 字段，但 ItemsControl 的模板项是动态生成的，拿不到强名字段，所以必须靠视觉树查找。
+    /// </summary>
     private static T? FindDescendant<T>(DependencyObject root, string name) where T : FrameworkElement
     {
         var count = VisualTreeHelper.GetChildrenCount(root);
@@ -509,6 +590,13 @@ public partial class BarWindow : Window
         return null;
     }
 
+    /// <summary>
+    /// 拿到（或首次创建并缓存）某插件的内嵌内容元素。
+    /// 同一插件只 CreateBarWidget 一次，之后都从 _widgets 缓存取，避免反复重建造成界面抖动。
+    /// 插件返回的 WidgetWidth/WidgetHeight：&gt;0 才显式设宽高；WidgetWidth &lt;= 0 表示“自动宽度”（交给布局决定），
+    /// 这对应需求里的“WidgetWidth <= 0 表示自动宽度”。
+    /// 插件代码可能抛异常：这里 try/catch 住，失败只记日志并返回 null，绝不连累宿主崩。
+    /// </summary>
     private FrameworkElement? EnsureWidget(PluginDescriptor descriptor)
     {
         if (_widgets.TryGetValue(descriptor.Id, out var cached))
@@ -550,6 +638,10 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 释放某个插件的内嵌内容：从缓存里移除，并调用插件自己的 ReleaseBarWidget 回收资源。
+    /// 插件卸载 / 不再固定时调用，避免缓存越积越多、内存泄漏。try/catch 防止插件释放逻辑出错拖垮宿主。
+    /// </summary>
     private void ReleaseWidget(string pluginId)
     {
         if (!_widgets.Remove(pluginId, out _))
@@ -568,6 +660,7 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>窗口关闭前统一释放所有插件内嵌内容（逐个调用 ReleaseWidget）。</summary>
     private void ReleaseAllWidgets()
     {
         foreach (var id in _widgets.Keys.ToArray())
@@ -578,6 +671,11 @@ public partial class BarWindow : Window
 
     // ================================================================ 鼠标交互
 
+    /// <summary>
+    /// 从被点击的元素(OriginalSource)反查出它属于哪个插件。
+    /// 做法：ItemsControl.ContainerFromElement 能由“视觉树里的某个子元素”找到它所在的那个容器(ContentPresenter)，
+    /// 而这个容器的 DataContext 正是绑定进去的 PluginDescriptor（插件描述）。找不到就返回 null。
+    /// </summary>
     private PluginDescriptor? DescriptorFromSource(object? source)
     {
         if (source is not DependencyObject node)
@@ -593,8 +691,13 @@ public partial class BarWindow : Window
     private bool IsInteractiveHit(object? source)
     {
         var node = source as DependencyObject;
+        // 从被点到的元素沿视觉树往上爬，直到遇到任务栏整体(ItemsHost)为止。
         while (node is not null && !ReferenceEquals(node, ItemsHost))
         {
+            // Tag 是 WPF 元素上一个“随便塞任意对象”的口袋属性。插件在自己内嵌内容的最外层
+            // 打上 Tag="Interactive"，相当于声明“这是我自己会处理的控件”。
+            // 看到这个标记就认为用户点的是插件控件，宿主不该再套“点一下切换面板”的默认行为。
+            // （任务栏模板里插件内嵌内容那一层故意不加这个 Tag，否则点读数会打不开面板。）
             if (node is FrameworkElement { Tag: "Interactive" })
             {
                 return true;
@@ -608,6 +711,10 @@ public partial class BarWindow : Window
         return false;
     }
 
+    /// <summary>
+    /// 鼠标按下预处理（隧道阶段）：只处理中键。中键=关闭该插件的面板（模拟系统任务栏习惯）。
+    /// 若点在插件自绘内容(IsInteractiveHit)上，则交给插件自己处理，宿主不插手。设 e.Handled=true 阻止继续冒泡。
+    /// </summary>
     private void OnItemsPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         // 中键 = 关闭该插件的界面（任务栏习惯）
@@ -627,6 +734,11 @@ public partial class BarWindow : Window
         InvokePluginClick(descriptor, BarItemActivationKind.Auxiliary, MouseButton.Middle);
     }
 
+    /// <summary>
+    /// 左键在任务栏上按下：记录“按下了哪个插件”和按下坐标，并捕获鼠标。
+    /// 捕获鼠标(Mouse.Capture)后，即使指针移出窗口范围，后续 MouseMove/Up 仍会发到本窗口，
+    /// 这样拖拽到窗口外也不会“丢手”。若点在插件自绘内容(IsInteractiveHit)上则直接放行、不进入拖拽逻辑。
+    /// </summary>
     private void OnItemsMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         _pressItem = null;
@@ -648,6 +760,11 @@ public partial class BarWindow : Window
         ItemsHost.CaptureMouse();
     }
 
+    /// <summary>
+    /// 鼠标移动：判断是否进入“拖拽排序”。
+    /// 关键：先比较按下点与当前点的距离，超过阈值(6px)才算拖拽。不判断阈值的话，手轻微一抖就会被当成拖拽，
+    /// 用户只是想点一下却把图标挪了。进入拖拽后实时调用 LiveReorder 让图标跟随鼠标。
+    /// </summary>
     private void OnItemsMouseMove(object sender, MouseEventArgs e)
     {
         if (_pressItem is null || e.LeftButton != MouseButtonState.Pressed)
@@ -670,6 +787,15 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 左键抬起：决定这次“按下→抬起”到底是点击还是拖拽结束。
+    ///   - 先松开鼠标捕获；
+    ///   - 若刚拖拽过：吃掉下一次 Click(_suppressNextClick)、把新顺序落盘(ApplyPinnedOrder)；
+    ///   - 否则若是插件自绘内容/需要抑制：直接忽略；
+    ///   - 双击：交给插件 DoubleClick 语义；
+    ///   - 普通单击：先让插件 OnClick 处理，插件没动过界面(ManagesOwnActivation/ClickHandled)才套用
+    ///     “点一下切换面板”。顺序很关键——若宿主先 toggle 一次、插件再 toggle 一次，面板会开了又立刻关（闪一下）。
+    /// </summary>
     private void OnItemsMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         ItemsHost.ReleaseMouseCapture();
@@ -716,6 +842,10 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 插件是否“自己管理激活态”。返回 true 表示插件在 OnClick 里自行决定开关面板，宿主就不要再默认 toggle。
+    /// 读取时 try/catch：插件代码若抛异常，保守当作“不自己管理”，仍套用宿主默认行为，避免宿主崩。
+    /// </summary>
     private static bool ManagesOwnActivation(PluginDescriptor descriptor)
     {
         try
@@ -809,6 +939,11 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 在某个任务图标上右键抬起：弹出“该插件”的上下文菜单（固定/打开界面/重载/卸载等）。
+    /// 若点在插件自绘内容(IsInteractiveHit)上则不当作图标右键，放行给窗口级主菜单处理。
+    /// 设 e.Handled=true 阻止事件继续冒泡到窗口级右键逻辑。
+    /// </summary>
     private void OnItemsMouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
         var descriptor = DescriptorFromSource(e.OriginalSource);
@@ -835,6 +970,10 @@ public partial class BarWindow : Window
 
     // ================================================================ 右键菜单
 
+    /// <summary>
+    /// 弹出任务栏主菜单（右键空白处/点把手时调用）。菜单在 BuildMainContextMenu 里拼装，
+    /// 然后用 PlacementMode.Bottom 贴着本窗口显示。
+    /// </summary>
     public void ShowMainContextMenu()
     {
         var menu = BuildMainContextMenu();
@@ -843,6 +982,12 @@ public partial class BarWindow : Window
         menu.IsOpen = true;
     }
 
+    /// <summary>
+    /// 拼装任务栏主菜单的全部项：设置、插件管理、迷你模式开关、主题、停靠边、文字标签、
+    /// 插件追加的菜单项（PluginMenuTarget.BarBackground）、打开目录、退出等。
+    /// 这里大量用 MenuBuilder.Item(...) 统一构造外观一致的菜单项；复选项(isCheckable)反映当前设置值。
+    /// 改动设置后调用 _settings.NotifyChanged() 通知保存、必要时 _shell.ApplySettings() 立即生效。
+    /// </summary>
     private ContextMenu BuildMainContextMenu()
     {
         var settings = _settings.Settings;
@@ -1010,6 +1155,11 @@ public partial class BarWindow : Window
         return menu;
     }
 
+    /// <summary>
+    /// 拼装并弹出“单个插件”的上下文菜单：打开/关闭界面、用作迷你模式内容、固定/取消固定、
+    /// 移到最前/最后、插件追加项(PluginMenuTarget.BarItem)、重载、禁用、打开目录、卸载删除等。
+    /// 菜单项是否可用会结合插件能力（HasPanel/HasCompact/HasTaskButton）判断。
+    /// </summary>
     private void ShowItemContextMenu(PluginDescriptor descriptor)
     {
         var menu = new ContextMenu { Style = (Style)FindResource("MiniBarContextMenuStyle") };
@@ -1130,6 +1280,10 @@ public partial class BarWindow : Window
         menu.IsOpen = true;
     }
 
+    /// <summary>
+    /// 弹出“溢出区(未固定插件)”菜单：把每个未固定插件做成一个子菜单，可执行打开界面/固定/禁用。
+    /// 没有任何未固定插件时显示一条提示项，最后附“插件管理”。
+    /// </summary>
     private void ShowOverflowMenu()
     {
         var menu = new ContextMenu { Style = (Style)FindResource("MiniBarContextMenuStyle") };
@@ -1173,6 +1327,11 @@ public partial class BarWindow : Window
 
     // ================================================================ 拖放
 
+    /// <summary>
+    /// 文件被拖到窗口上方（悬停）时触发。AllowDrop=true 才能让窗口接收拖放。
+    /// 这里只判断拖的是不是文件(DataFormats.FileDrop)，是则把光标效果设为 Copy（显示“可放下”图标）并高亮边框；
+    /// 不是则设为 None，表示不接受。必须设 e.Handled=true 表示我们处理了这个事件。
+    /// </summary>
     private void OnFileDragOver(object sender, DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(DataFormats.FileDrop))
@@ -1187,11 +1346,17 @@ public partial class BarWindow : Window
         e.Handled = true;
     }
 
+    /// <summary>拖放离开窗口：把高亮边框恢复正常（去掉拖入时的强调色）。</summary>
     private void OnFileDragLeave(object sender, DragEventArgs e)
     {
         ShellBorder.BorderBrush = (Brush)FindResource("BarBorderBrush");
     }
 
+    /// <summary>
+    /// 文件真正落在窗口上：取出拖进来的路径数组，判断落点是“图标”还是“空白”，然后交给
+    /// ShellService.HandleDrop 分发——先问被命中的目标插件，再按顺序问其它拖放插件，最后内置兜底
+    /// （例如单个 DLL 直接热加载）。这样插件能自定义拖放行为，宿主又不至于对未知拖放毫无反应。
+    /// </summary>
     private void OnFileDrop(object sender, DragEventArgs e)
     {
         OnFileDragLeave(sender, e);
@@ -1215,6 +1380,7 @@ public partial class BarWindow : Window
 
     // ================================================================ 按钮
 
+    // 把手(Grip)点击 → 主菜单；溢出按钮 → 溢出菜单；加号 → 插件管理器。
     private void OnGripClick(object sender, RoutedEventArgs e) => ShowMainContextMenu();
 
     private void OnOverflowClick(object sender, RoutedEventArgs e) => ShowOverflowMenu();
@@ -1223,6 +1389,11 @@ public partial class BarWindow : Window
 
     // ================================================================ 工具
 
+    /// <summary>
+    /// 判断某插件文件是否位于我们的插件目录（用户目录或内置目录）内。
+    /// 只有“自家地盘”里的插件才允许“卸载并删除文件”，避免误删用户机器上其它地方的 DLL。
+    /// 路径比较前先 Path.GetFullPath 规范化（处理相对路径/大小写），全程 try/catch 防异常。
+    /// </summary>
     private static bool IsInsidePluginDirectory(string path)
     {
         try
@@ -1237,6 +1408,10 @@ public partial class BarWindow : Window
         }
     }
 
+    /// <summary>
+    /// 用资源管理器打开某个路径：目录就直接打开；文件就 /select 选中它；路径不存在就先建目录再打开。
+    /// 用 explorer.exe + UseShellExecute 调起系统外壳。全程 try/catch，打开失败只记日志不崩。
+    /// </summary>
     private static void OpenInExplorer(string path)
     {
         try

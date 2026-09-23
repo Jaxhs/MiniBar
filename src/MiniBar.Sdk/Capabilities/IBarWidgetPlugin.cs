@@ -1,3 +1,14 @@
+/// <summary>
+/// 本文件定义“任务栏内嵌内容”能力 <see cref="IBarWidgetPlugin"/>：
+/// 插件可以直接把自定义控件渲染进任务栏显示区（而不是只有一个图标）。
+///
+/// <para>内嵌内容里关于“点击”的坑：默认点整块内容 = 点该插件图标（开关它的面板）；
+/// 真正的控件（Button/TextBox）会自己吃掉点击；只有用非控件元素（如 Border）又想让它吞掉点击时，
+/// 才在那个元素上设 <c>Tag = "Interactive"</c>。</para>
+///
+/// <para><b>切记：</b>不要把<b>整个返回的顶层元素</b>的 Tag 设成 "Interactive"，那会让整块内容不再切换面板，
+/// 用户点了没反应。只给确实需要吞点击的子元素设。</para>
+/// </summary>
 using System.Windows;
 
 namespace MiniBar.Sdk;

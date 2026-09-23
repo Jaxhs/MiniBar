@@ -126,18 +126,23 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
             Foreground = Quote("ForegroundBrush"),
             // 万一还是放不下（比如用户填了超长格式），退化成省略号而不是被硬切，悬停可看全
             TextTrimming = TextTrimming.CharacterEllipsis,
-            Tag = "Interactive",
+            // 注意：这里**不要**写 Tag = "Interactive"。
+            // 那个标记的意思是"这块是我自己会处理的控件，宿主别管"，
+            // 一旦加上，点任务栏上的时间就不会再切换面板了（读数类插件最容易踩这个坑）。
         };
 
-        UpdateBarText();
-        EnsureTimer();
-
-        return new Border
+        // 整块读到内容外面包一层 Border：可以用来加内边距、挂悬停提示
+        var border = new Border
         {
             Padding = new Thickness(4, 0, 4, 0),
             Child = _barText,
             ToolTip = "点这里打开世界时钟面板",
         };
+
+        UpdateBarText();
+        EnsureTimer();
+
+        return border;
     }
 
     public void ReleaseBarWidget()
@@ -310,6 +315,7 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
         _timer.Start();
     }
 
+    /// <summary>只在"所有界面都不需要它了"时才真正停定时器：任务栏 / 面板 / 迷你窗口都收起时，计时没意义也该让出 CPU。</summary>
     private void StopTimerIfIdle()
     {
         if (_barText is null && _panelClock is null && _compactText is null)
@@ -424,6 +430,8 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
         }
     }
 
+    /// <summary>按内置 Cities 列表生成每一行（城市名 + 当地 HH:mm）。
+    /// 用 Grid 让"名字占满左边、时间靠右"；Tag 上存时区 ID，定时刷新时好定位。</summary>
     private void BuildCityRows()
     {
         if (_cityHost is null)

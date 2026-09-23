@@ -1,3 +1,11 @@
+/// <summary>
+/// 本文件定义“任务栏图标”能力 <see cref="ITaskButtonPlugin"/>：插件在任务栏显示区出现一个图标，
+/// 以及图标状态快照 <see cref="BarItemState"/>。
+///
+/// <para>固定/取消固定、排序、拖拽重排由宿主统一负责并持久化，插件只管“显示什么、点击后做什么”。
+/// 点击语义见 <see cref="BarItemClickContext"/>：默认宿主自动切换面板，插件也可通过
+/// <see cref="ITaskButtonPlugin.ManagesOwnActivation"/> 完全接管。</para>
+/// </summary>
 namespace MiniBar.Sdk;
 
 /// <summary>

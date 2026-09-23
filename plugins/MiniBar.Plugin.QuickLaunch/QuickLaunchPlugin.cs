@@ -14,6 +14,15 @@ namespace MiniBar.Plugin.QuickLaunch;
 /// <summary>
 /// 示例插件：快捷启动。
 ///
+/// <para><b>它演示了什么</b></para>
+/// <list type="bullet">
+///   <item>「面板 + 列表」：一个可增删、可上下移动的路径列表（每行都是代码拼出来的）；</item>
+///   <item>「全局快捷键批量注册」：Ctrl+Alt+1~5 对应前五个快捷项，且演示了注册冲突的处理；</item>
+///   <item>「拖放认领」：把文件 / 文件夹拖到任务栏就自动加入列表；</item>
+///   <item>「用系统外壳启动」：<c>UseShellExecute = true</c> 让 .docx / 文件夹 / 网址各自用合适的程序打开；</item>
+///   <item>「没有内嵌内容也能存在」：这个插件在任务栏上只有一个图标 + 角标，说明插件不必都去画读数。</item>
+/// </list>
+///
 /// 这是一个“没有任务栏图标也能工作”的插件示范 —— 它同时提供：
 ///   · IDropHandlerPlugin —— 把任意文件 / 文件夹拖到任务栏上就登记为快捷项；
 ///   · IContextMenuPlugin —— 往任务栏空白处、图标上、迷你窗口、插件管理器四处加菜单；
@@ -40,6 +49,9 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
     private IPluginContext _context = null!;
     private StackPanel? _listHost;
 
+    /// <summary>插件初始化：从配置里读回上次保存的快捷项列表。
+    /// <para>插件配置按插件 ID 隔离存在宿主的 settings.json 里，不需要自己管理文件。</para>
+    /// </summary>
     public void Initialize(IPluginContext context)
     {
         _context = context;
@@ -53,6 +65,9 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         context.Logger.Info($"快捷启动已就绪，共 {_shortcuts.Count} 项");
     }
 
+    /// <summary>插件被禁用 / 卸载时调用：把列表落盘并清掉所有界面引用。
+    /// <para>不做这一步，可回收的 AssemblyLoadContext 就回收不了（「禁用后内存不降」多半是这里漏了）。</para>
+    /// </summary>
     public void Dispose()
     {
         _listHost = null;
@@ -68,8 +83,11 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         ? "把文件或文件夹拖到任务栏上，就会登记到这里"
         : $"{_shortcuts.Count} 个快捷项";
 
+    /// <summary>角标显示快捷项数量；一项都没有时不显示角标。</summary>
     public string? Badge => _shortcuts.Count > 0 ? _shortcuts.Count.ToString() : null;
 
+    /// <summary>任务栏格子被点击时调用。只接管"左键单击"的面板开关，其余交给宿主，避免两边各切一次。
+    /// <para>想启动快捷项请用面板里的"打开"按钮或 Ctrl+Alt+1~5，而不是点图标——图标只负责开关面板。</para></summary>
     public void OnClick(BarItemClickContext context)
     {
         // 左键单击 → 插件自己开关面板；其它键（中键/双击）由宿主按任务栏习惯处理。
@@ -86,8 +104,10 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
 
     public double PreferredWidth => 420;
 
+    /// <summary>面板首选高度（像素）。列表 + 工具栏 + 提示，320 基本一屏。</summary>
     public double PreferredHeight => 320;
 
+    /// <summary>面板内容：快捷项列表（每行一个路径 + 启动 / 移除 / 上移 / 下移）+ 添加按钮。</summary>
     public FrameworkElement CreateContent(IPanelHost host)
     {
         _listHost = new StackPanel { Margin = new Thickness(2) };
@@ -150,6 +170,7 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         return grid;
     }
 
+    /// <summary>面板关闭：清掉界面引用（本项目这个插件的计时器都在界面元素上，清掉即可）。</summary>
     public void ReleaseContent()
     {
         _listHost = null;
@@ -158,6 +179,7 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         GC.Collect(0, GCCollectionMode.Optimized);
     }
 
+    /// <summary>按当前列表重建整个界面（元素很少，直接重建最省心，不必做增量更新）。</summary>
     private void RebuildList()
     {
         if (_listHost is null)
@@ -186,6 +208,9 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         }
     }
 
+    /// <summary>构建列表里的一行：序号 + 路径（省略号 + 悬停看全文）+ 四个操作按钮。
+    /// <para>按钮的 Tag 上挂着行号，回调时就能知道操作的是哪一行。</para>
+    /// </summary>
     private FrameworkElement BuildRow(int index, string path)
     {
         var exists = File.Exists(path) || Directory.Exists(path);
@@ -260,10 +285,14 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         return row;
     }
 
+    /// <summary>双击列表行——目前不做任何事（保留这个处理器是为了说明"事件可以先接住再决定要不要处理"）。</summary>
     private void OnListDoubleClick(object sender, MouseButtonEventArgs e) { }
 
     // ---------------------------------------------------------------- 拖放
 
+    /// <summary>是否接管这次拖放：认领文件与文件夹。
+    /// <para>文本类文件会被便签插件先认领 —— 谁优先取决于插件安装顺序（本项目里便签在前）。</para>
+    /// </summary>
     public bool CanHandle(PluginDropContext context)
     {
         if (context.Paths.Count == 0)
@@ -281,6 +310,9 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         return context.Paths.All(p => File.Exists(p) || Directory.Exists(p));
     }
 
+    /// <summary>把拖进来的文件 / 文件夹加入快捷项。
+    /// <para>设置 context.Handled = true 告诉宿主「这次拖放我处理了」。</para>
+    /// </summary>
     public void OnDrop(PluginDropContext context)
     {
         var added = 0;
@@ -306,6 +338,7 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
 
     // ---------------------------------------------------------------- 菜单
 
+    /// <summary>右键菜单项：按顺序列出前几个快捷项（点一下直接启动），外加添加 / 清空 / 打开面板。</summary>
     public IEnumerable<PluginMenuEntry> GetMenuEntries(PluginMenuContext context)
     {
         // 拖到图标上时，插件菜单里可以看到“用这个打开”（这里示范按目标类型区分）
@@ -355,6 +388,9 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
 
     // ---------------------------------------------------------------- 快捷键
 
+    /// <summary>声明全局快捷键 Ctrl+Alt+1~5：一键启动第 N 个快捷项。
+    /// <para>组合键可能被输入法/显卡驱动占用，注册失败时宿主会回调 OnHotkeyRegistrationFailed。</para>
+    /// </summary>
     public IEnumerable<PluginHotkey> GetHotkeys()
     {
         // 固定保留 5 个槽位；没有对应项时按下不会有任何事情发生
@@ -368,6 +404,7 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         }
     }
 
+    /// <summary>快捷键回调：hotkeyId 形如 slot1…slot5，对应启动第几个快捷项。</summary>
     public void OnHotkey(string hotkeyId)
     {
         if (!hotkeyId.StartsWith("slot", StringComparison.Ordinal) ||
@@ -386,6 +423,8 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         Launch(_shortcuts[index]);
     }
 
+    /// <summary>快捷键注册失败回调（如 Ctrl+Alt+数字 被别的程序占用）。只记日志，不弹窗打扰。
+    /// <para>这是常态——很多人会自定义全局快捷键，注册不上不该阻断插件其余功能。</para></summary>
     public void OnHotkeyRegistrationFailed(string hotkeyId, string reason)
     {
         // 快捷键被占用是常态（很多人会用 Ctrl+Alt+数字），只提示一次级别的信息
@@ -394,6 +433,7 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
 
     // ---------------------------------------------------------------- 内部
 
+    /// <summary>把快捷项列表写进插件配置（宿主对写盘做了 800ms 防抖合并，可以放心频繁调用）。</summary>
     private void Persist()
     {
         _context.SetSetting(SettingsKey, _shortcuts);
@@ -401,6 +441,10 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         RebuildList();
     }
 
+    /// <summary>弹系统的文件 / 文件夹选择框。
+    /// <para>OpenFolderDialog 是 .NET 8 才加入 WPF 的，更早的版本只能用 Win32 的 SHBrowseForFolder；
+    /// 用现成对话框比自己 P/Invoke 稳定得多。</para>
+    /// </summary>
     private void PickPath(bool pickFolder)
     {
         // 用 .NET 自带的 OpenFileDialog / 文件夹选择走 shell，这里简单起见只做文件选择，
@@ -429,6 +473,10 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         Persist();
     }
 
+    /// <summary>启动一个快捷项。
+    /// <para><b>UseShellExecute = true 的意思：</b>交给系统外壳去打开 —— 于是 .docx 会用 Word 打开、
+    /// 文件夹会开资源管理器、网址会用默认浏览器，而不要求这里给出 exe 的完整路径。</para>
+    /// </summary>
     private void Launch(string path)
     {
         try
@@ -449,6 +497,7 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         }
     }
 
+    /// <summary>做一个小按钮（颜色跟随主题）。</summary>
     private Button MakeButton(string text, Action action)
     {
         var button = new Button
@@ -467,6 +516,11 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
         return button;
     }
 
+    /// <summary>把 "#AARRGGBB" 变成 WPF 画刷。
+    /// <para><b>SolidColorBrush：</b>纯色画刷，最低成本。</para>
+    /// <para><b>ColorConverter：</b>把颜色字符串转成 WPF 的 Color 结构（支持 #RRGGBB / #AARRGGBB）。</para>
+    /// <para><b>Brush.Freeze()：</b>冻结后画刷不可变、可跨线程复用、渲染时跳过变更检查，更快也更省；
+    /// 因为这些颜色是常量，冻结零副作用。</para></summary>
     private static Brush BrushFrom(string hex)
     {
         var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));

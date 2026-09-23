@@ -1,4 +1,10 @@
-﻿using MiniBar.Sdk;
+﻿/// <summary>
+/// 本文件是插件图标描述串（"emoji:🕒" / "glyph:E823" …）的解析单元测试。
+///
+/// <para>这套语法是插件的公开契约：解析错了，任务栏图标就会变成“豆腐块”（□）。
+/// 所以用测试把这些规则钉死——任何改动都不能让既有语法悄悄失效。</para>
+/// </summary>
+using MiniBar.Sdk;
 
 namespace MiniBar.Sdk.Tests;
 

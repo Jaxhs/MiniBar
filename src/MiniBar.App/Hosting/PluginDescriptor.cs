@@ -6,8 +6,15 @@ using MiniBar.Sdk;
 namespace MiniBar.App.Hosting;
 
 /// <summary>
-/// 一个插件的宿主侧模型：既描述“磁盘上的插件”，也承载“当前是否加载 / 是否固定 / 是否出错”。
-/// 界面直接绑定它（任务栏图标、插件管理器共用）。
+/// 一个插件的宿主侧模型（MVVM 里的“视图模型”）：既描述“磁盘上的插件长什么样”，也承载“当前是否加载 / 是否固定 /
+/// 是否出错”这类运行时状态。界面（任务栏图标、插件管理器）直接绑定它的属性，属性变化会自动通知界面刷新。
+///
+/// 新手须知：
+///   · 它继承自 ObservableObject——这是项目自写的轻量基类，属性用 SetProperty 赋值时会自动触发属性变更通知
+///     （类似 INotifyPropertyChanged），于是改了 IsPinned 之类，界面立刻重绘，无需手动刷新；
+///   · 它的“能力标记”（HasPanel / HasSettings …）在扫描阶段就由类型判断得出，是 bool 缓存，运行时零反射开销；
+///   · 真正的插件实例（IMinibarPlugin）和加载上下文只存在 internal 字段里，界面碰不到，天然隔离了“宿主内部对象”；
+///   · Icon / DisplayName / Tooltip / Badge 提供“优先用插件运行时值、回退到清单声明”的取值逻辑，刷新靠 RefreshVisuals。
 /// </summary>
 public sealed class PluginDescriptor : ObservableObject
 {
@@ -20,12 +27,17 @@ public sealed class PluginDescriptor : ObservableObject
     private bool _isMiniHost;
     private bool _isDuplicate;
 
+    /// <summary>
+    /// 用探测结果 PluginCandidate 构造。注意：Candidate 是“纯字符串”的扫描产物（不持有任何插件类型），
+    /// 所以即便插件从没被加载，这个宿主模型也能完整存在——这就是为什么“禁用/未加载的插件”也有图标与名称可显示。
+    /// </summary>
     public PluginDescriptor(PluginCandidate candidate)
     {
         Candidate = candidate;
         _isPinned = candidate.DefaultPinned;
     }
 
+    /// <summary>探测阶段得到的纯元数据快照（id/名称/能力/图标声明等）。与真正的插件实例解耦。</summary>
     public PluginCandidate Candidate { get; private set; }
 
     public string Id => Candidate.Id;
@@ -190,6 +202,7 @@ public sealed class PluginDescriptor : ObservableObject
 
     internal PluginContext? Facade { get; set; }
 
+    // ---- 把“实例”按能力接口做 as 转换，是运行时零成本的能力查询：没有该能力就得到 null ----
     internal ITaskButtonPlugin? TaskButton => Instance as ITaskButtonPlugin;
 
     internal ISettingsPlugin? Settings => Instance as ISettingsPlugin;

@@ -8,13 +8,18 @@ using MiniBar.Sdk;
 namespace MiniBar.App.Services;
 
 /// <summary>
-/// 宿主能力门面：把“面板 / 迷你窗口 / 通知 / 浮窗 / 拖放 / 菜单聚合 / 热插拔”统一实现好，
-/// 插件只依赖 <see cref="IShellService"/> 接口，与具体窗口实现解耦。
+/// 宿主能力门面：<see cref="IShellService"/> 的【唯一实现】。插件做不了、或不该自己做的事（开面板、迷你模式、通知、浮窗、
+/// 热插拔、打开设置/插件管理器）都通过它申请；它同时是“宿主状态变化”的广播中心——主题变化、迷你模式进出都会从这里
+/// 通知到所有插件（见 OnThemeChanged / RaiseThemeChanged）。
 ///
-/// 内存策略：
-///   · 浮层窗口、迷你窗口、通知窗口、插件管理器都只在第一次用到时才创建；
-///   · 插件面板内容在关闭时立刻释放（调用插件的 ReleaseContent）；
-///   · 同一时刻只保留一个面板浮层 —— 任务栏式交互本来就是这样，也最省资源。
+/// 设计要点：
+///   · 插件只依赖 IShellService 接口，永远碰不到具体窗口类型，宿主升级窗口实现也不影响插件；
+///   · 面板生命周期：每次打开调插件 CreateContent、关闭调 ReleaseContent；插件必须在 ReleaseContent 里停计时器/断开引用
+///     （低内存的关键约定）。浮层是【同一个窗口复用】——关闭时把内容置空，不销毁窗口，下次打开直接换内容；
+///   · 内存策略：浮层/迷你/通知/管理器/设置窗口都“第一次用到才创建”（惰性），插件面板内容关闭即释放；
+///   · 点击语义（踩过坑）：宿主先调插件 OnClick；插件若在 OnClick 里调用 OpenPanel/ClosePanel/TogglePanel/EnterMiniMode，
+///     会把 BarItemClickContext.ClickHandled 置 true，宿主就不再套默认行为；否则只要插件实现了 IPanelContentPlugin，
+///     宿主自动 toggle 面板。两边都 toggle = 面板开一下马上关。
 /// </summary>
 public sealed class ShellService : IShellService, IDisposable
 {
@@ -24,7 +29,6 @@ public sealed class ShellService : IShellService, IDisposable
     private FlyoutWindow? _flyout;
     private MiniWindow? _mini;
     private ToastWindow? _toast;
-    private PluginManagerWindow? _manager;
     private SettingsWindow? _settingsWindow;
     private readonly List<FloatingWindow> _floatingWindows = new();
     private BarWindow? _bar;
@@ -58,6 +62,18 @@ public sealed class ShellService : IShellService, IDisposable
 
     // ---------------------------------------------------------------- 面板
 
+    /// <summary>
+    /// 打开某插件的面板浮层。任务栏式交互：点同一个已打开图标的面板应“关闭”，所以这里有 toggle 的微妙处理。
+    ///
+    /// 分步骤：
+    ///   1. 查找 descriptor；不是已加载、或不具备面板能力（descriptor.Panel 为 null）直接忽略；
+    ///   2. 若当前已是该插件打开且浮层可见 → 改为关闭（ClosePanel），实现“再点一下收起”；
+    ///   3. 否则先 ClosePanelCore() 关掉上一个面板（同一时刻只保留一个浮层，最省资源）；
+    ///   4. 用 PanelHost 适配宿主与插件：调用插件的 CreateContent(host) 生成界面内容，塞进 EnsureFlyout() 得到的（复用）浮层窗口；
+    ///   5. 记录 ActivePanelPlugin、置 IsPanelOpen=true，并通知插件状态变化。
+    ///
+    /// 为什么复用同一个浮层窗口而不每次 new：频繁开关面板时重复建窗/销窗既慢又容易内存抖动；复用 + ReleaseContent 是最稳的约定。
+    /// </summary>
     public void OpenPanel(string pluginId)
     {
         var descriptor = _plugins.Find(pluginId);
@@ -123,6 +139,10 @@ public sealed class ShellService : IShellService, IDisposable
 
     public void CloseAllPanels() => ClosePanelCore();
 
+    /// <summary>
+    /// 关闭面板的核心实现（被 OpenPanel/ClosePanel/TogglePanel/ExitMiniMode 共用）。
+    /// 关键点：调用插件的 ReleaseContent() 让插件停计时器、断开引用（这是低内存约定），再把浮层内容清空，最后 TrimMemory。
+    /// </summary>
     private void ClosePanelCore()
     {
         var descriptor = ActivePanelPlugin;
@@ -172,6 +192,9 @@ public sealed class ShellService : IShellService, IDisposable
         }
     }
 
+    /// <summary>
+    /// 惰性获取浮层窗口：第一次才 new 出来并订阅 PanelClosed 事件；之后复用同一个实例（面板“同一窗口复用”策略的核心）。
+    /// </summary>
     private FlyoutWindow EnsureFlyout()
     {
         if (_flyout is null)
@@ -272,6 +295,10 @@ public sealed class ShellService : IShellService, IDisposable
         _bar?.RefreshMiniIndicator();
     }
 
+    /// <summary>
+    /// 重新生成迷你窗口内容：解析出当前迷你插件 → 释放旧内容 → 调插件的 CreateCompactContent() 换上新内容；
+    /// 没有合适插件时显示占位提示。每次进出迷你模式或切换内容源都会走这里。
+    /// </summary>
     private void RefreshMiniContent()
     {
         var descriptor = ResolveMiniPlugin();
@@ -395,6 +422,7 @@ public sealed class ShellService : IShellService, IDisposable
 
     public bool IsPluginLoaded(string pluginId) => _plugins.Find(pluginId)?.IsLoaded ?? false;
 
+    /// <summary>重新加载某插件（先卸后载）：跳过重复文件。供界面“重新加载”按钮或诊断用。</summary>
     public bool ReloadPlugin(string pluginId)
     {
         var descriptor = _plugins.Find(pluginId);
@@ -407,24 +435,25 @@ public sealed class ShellService : IShellService, IDisposable
         return true;
     }
 
+    /// <summary>把所有插件的 PluginInfo 快照返回（UI/远程查询用，不含内部引用）。</summary>
     public IReadOnlyList<PluginInfo> GetPlugins() => _plugins.GetPluginInfos();
 
+    /// <summary>弹出主菜单（任务栏右键菜单的入口，由宿主窗口实现）。</summary>
     public void ShowMainMenu() => _bar?.ShowMainContextMenu();
 
-    public void ShowPluginManager()
-    {
-        if (_manager is null || !_manager.IsLoaded)
-        {
-            _manager = new PluginManagerWindow(_plugins, this, _settings);
-        }
+    /// <summary>
+    /// 打开"插件管理"。
+    ///
+    /// <para>
+    /// 注意：插件管理界面**已经合并进设置窗口**（原来是一个独立窗口），
+    /// 所以这里只是把设置窗口打开并定位到「插件管理」页 —— 对外接口保持不变，
+    /// 老代码（菜单、快捷键 Ctrl+Alt+P、插件管理器按钮）都不需要改。
+    /// </para>
+    /// </summary>
+    public void ShowPluginManager() => ShowSettings(PluginManagerPage);
 
-        _manager.Show();
-        _manager.Activate();
-        if (_manager.WindowState == WindowState.Minimized)
-        {
-            _manager.WindowState = WindowState.Normal;
-        }
-    }
+    /// <summary>设置窗口里"插件管理"页的伪插件 ID（不会与真实插件 ID 冲突）。</summary>
+    internal const string PluginManagerPage = "minibar.page.plugins";
 
     /// <summary>打开设置窗口（宿主设置 + 所有插件的设置）。</summary>
     public void ShowSettings(string pluginId = "")
@@ -452,10 +481,16 @@ public sealed class ShellService : IShellService, IDisposable
     // ---------------------------------------------------------------- 拖放
 
     /// <summary>
-    /// 统一的拖放处理入口。顺序：
-    ///   1) 拖到某个图标上时，先问该插件；
-    ///   2) 再依次问其它实现了 IDropHandlerPlugin 的插件；
-    ///   3) 都没人处理就走内置兜底：DLL → 加载插件；其它 → 提示并给出可执行动作。
+    /// 统一的拖放处理入口（任务栏把文件/文件夹拖到 MiniBar 上时调用）。
+    ///
+    /// 分步骤：
+    ///   1. 没东西被拖进来直接返回；先判断是不是“单个 .dll”（决定后续兜底动作）；
+    ///   2. 组装候选插件顺序：① 拖到的那个目标插件（若它已加载且支持拖放）排第一；② 其余启用的、支持拖放的插件按固定顺序排后面；
+    ///   3. 逐个问插件：先 CanHandle 询问“你接不接”，接就 OnDrop 交给它处理；插件把 PluginDropContext.Handled 置 true 表示“我处理完了”；
+    ///   4. 任一插件处理后立即 return；插件处理抛异常则提示并 return（不让一个插件拖垮整个拖放）；
+    ///   5. 谁都没接 → HandleDropFallback：单个 DLL 按设置决定自动加载插件，其它文件给个“把插件 DLL 拖到这里”的提示。
+    ///
+    /// 为什么“先问目标插件、再问其它”：让用户拖到特定图标上有明确意图（比如拖文件到某插件），同时保留全局兜底，体验最顺。
     /// </summary>
     public void HandleDrop(IReadOnlyList<string> paths, PluginDropTarget target, string? targetPluginId, Point screenPosition)
     {
@@ -664,7 +699,6 @@ public sealed class ShellService : IShellService, IDisposable
 
         _mini?.ReleaseContent();
         _mini?.Close();
-        _manager?.Close();
         _settingsWindow?.Close();
         _toast?.Close();
         _flyout?.ClosePanel();

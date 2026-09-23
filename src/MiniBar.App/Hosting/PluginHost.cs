@@ -11,10 +11,43 @@ namespace MiniBar.App.Hosting;
 /// <summary>
 /// 插件宿主：负责发现、加载、卸载、启用、禁用、删除与目录监视。
 ///
+/// ════════════════════════════════════════════════════════════════════
+/// 给新手的“插件从被发现到被卸载”完整流程（建议按顺序读一遍）
+/// ════════════════════════════════════════════════════════════════════
+/// 1. 扫描目录（RescanAsync）：枚举内置目录与用户目录下的 *.dll，对每个 DLL 单独丢进一个
+///    “临时 ALC”（AssemblyLoadContext，.NET 里“加载 DLL”=把它登记进某个 ALC）。这个临时上下文
+///    只做一件事：读出元数据（哪个类型实现了 IMinibarPlugin、带不带 [PluginManifest]、能力列表、
+///    图标、名称），然后把上下文整个 Unload 掉。因为只读元数据、不实例化、不留引用，所以判断
+///    “是不是插件”完全不会污染内存，也不需要真正加载插件代码。结果用纯字符串 PluginCandidate 保存。
+/// 2. 合并（Merge）：把探测结果登记成一个 PluginDescriptor（宿主侧模型）。同一插件 ID 出现多份时，
+///    先发现的那个保持正常，后来的只标成 IsDuplicate（重复文件，可在界面里删），绝不反向标记已经
+///    正常的那个——早期版本写反过，导致同一 DLL 装两份时全部不加载。
+/// 3. 加载（LoadInstance）：在 UI 线程为插件新建一个“可回收”的 ALC（isCollectible: true）。注意默认
+///    ALC 永远不能卸载，所以每个插件必须单独建 ALC 才能做到“删掉插件真的释放内存”。插件 DLL 用
+///    流式加载（LoadFromStream）而非 LoadFromAssemblyPath——这样宿主不占文件句柄，卸载后能立刻删除
+///    DLL（副作用：插件里 Assembly.Location 为空）。加载时 MiniBar.Sdk 契约程序集必须共享（插件 ALC
+///    遇到它 return null 交回默认上下文），否则类型标识不一致，instance is IMinibarPlugin 会恒为 false。
+///    找到入口类型 → Activator.CreateInstance → instance.Initialize(facade)。
+/// 4. 运行：宿主通过 facade（PluginContext）回调插件能力；点击事件由宿主先调插件 OnClick，插件若
+///    在 OnClick 里调用 OpenPanel/TogglePanel 等会把 ClickHandled 置 true，宿主就不再套默认行为，
+///    否则只要插件实现了 IPanelContentPlugin，宿主自动 toggle 面板。
+/// 5. 卸载（UnloadInstance）：调用插件 Dispose、把上下文 Unload()。但 Unload() 只是“标记可回收”，
+///    插件里只要有活对象（静态字段、没停的计时器、事件订阅）就回收不了。所以这里主动 GC.Collect +
+///    WaitForPendingFinalizers 催两轮，再 TrimMemory（EmptyWorkingSet 把内存页还给系统，实测 109MB→12MB）。
+/// 6. 文件消失（僵尸路径）：卸载实例、把描述符移出列表，但【保留】持久化状态（Enabled/Pinned/Order），
+///    这样文件放回来能恢复原来的固定位置。
+///
+/// 关键概念速查：
+///   · AssemblyLoadContext（ALC）：决定①从哪找依赖②同名程序集算不算同一类型③以后能不能卸载。
+///   · 契约共享：MiniBar.Sdk 在两个 ALC 间必须共享，否则类型身份不一致。
+///   · 流式加载：LoadFromStream 不锁文件，卸载后可立即删 DLL；代价是 Assembly.Location 为空。
+///   · collectible ALC：只有引用彻底归零才会真回收，所以卸载要配合 GC。
+///   · 僵尸路径清单：文件删了但要留状态。
+///
 /// 线程模型（很重要）：
 ///   · 文件枚举与程序集探测放在后台线程（只读元数据，不碰 UI）；
 ///   · 插件实例的创建、Initialize、以及所有能力回调都在 UI 线程；
-///   · ObservableCollection 的增删只在 UI 线程执行。
+///   · ObservableCollection 的增删只在 UI 线程执行（WPF 界面对象有线程亲和性，跨线程改会抛异常）。
 ///
 /// 内存模型：
 ///   · 每个插件一个可回收 AssemblyLoadContext；
@@ -99,6 +132,10 @@ public sealed class PluginHost : IDisposable
         AddWatcher(AppPaths.UserPluginDirectory);
     }
 
+    /// <summary>
+    /// 给单个目录挂一个 FileSystemWatcher：只看 *.dll，关注文件名/最后写入/大小变化，监听创建·删除·重命名·修改四类事件。
+    /// 目录不存在时跳过；建监视器失败（权限等）只记日志不抛，保证宿主不被个别目录拖垮。
+    /// </summary>
     private void AddWatcher(string directory)
     {
         try
@@ -150,7 +187,20 @@ public sealed class PluginHost : IDisposable
     // ---------------------------------------------------------------- 扫描
 
     /// <summary>
-    /// 重新扫描两个插件目录：加入新插件、剔除文件已消失的插件。
+    /// 重新扫描两个插件目录（内置 + 用户）：加入新插件、剔除文件已消失的插件。
+    /// 这是“热插拔”的核心入口，被首次启动（StartAsync）、目录监视回调、拖入 DLL 等共用。
+    ///
+    /// 分步骤：
+    ///   1. 枚举两个目录的候选 DLL（排除 MiniBar.Sdk.dll、MiniBar.dll、*.resources.dll）；
+    ///   2. 用 HashSet 找出“磁盘上有但集合里还没有”的新文件；
+    ///   3. 在后台线程（Task.Run）里逐个 Probe —— 只读元数据、用临时 ALC 探测后立刻 Unload，
+    ///      不污染内存、不锁文件。读磁盘很慢，所以放后台，避免卡 UI；
+    ///   4. 回到 UI 线程，按“同一 ID 修改时间新的优先”合并（Merge）；
+    ///   5. 文件已消失的插件：卸载实例、移出列表、保留持久化状态（僵尸路径清单）；
+    ///   6. 对“启用且未加载且非重复”的补做加载，并触发 LayoutChanged 让任务栏重排。
+    ///
+    /// 为什么放回 UI 线程再做合并/加载：WPF 的 ObservableCollection 与界面对象有线程亲和性，
+    /// 跨线程增删会直接抛异常；而探测是纯只读元数据，放后台最划算。
     /// </summary>
     public async Task RescanAsync()
     {
@@ -228,10 +278,19 @@ public sealed class PluginHost : IDisposable
     }
 
     /// <summary>
-    /// 合并一个探测到的插件。
-    /// 冲突处理原则：先发现的那个（扫描顺序固定：内置目录 → 用户目录）保持正常可用，
-    /// 后来者只登记成"重复"并在插件管理器里显示，绝不去动已经正常的那个 ——
-    /// 早期版本这里是反的，导致同一个插件装了两份时全部不加载。
+    /// 合并一个探测到的插件：把它变成宿主侧模型 PluginDescriptor 并登记进集合。
+    ///
+    /// 分步骤：
+    ///   1. 找一个“同 ID 且非重复”的已存在插件；
+    ///   2. 若存在且两份文件【内容相同】（文件名+长度+修改时间一致，认为是同一 DLL 的副本，
+    ///      比如 Debug/Release 两个输出目录各一份）→ 静默忽略，不重复登记；
+    ///   3. 若存在但内容不同 → 新建一个 IsDuplicate=true 的副本登记：**保留先发现的那个**，只把新来的
+    ///      标成“重复文件”，后者不加载、可在界面里删除。绝不去动已经正常加载的那个；
+    ///   4. 若不存在 → 用 PluginStateStore.GetOrCreate 取/建持久化状态（Enabled/Pinned/Order），建成
+    ///      正常插件登记进 ObservableCollection。
+    ///
+    /// 为什么“先发现者胜出、绝不反向标记”：早期版本把后来者当成正常、把已加载的标成重复，结果同一 DLL
+    /// 装两份时本该正常的那个也被误判，导致全部插件都不加载。这个顺序（内置 → 用户）是稳定且正确的。
     /// </summary>
     private bool Merge(PluginCandidate candidate)
     {
@@ -347,7 +406,26 @@ public sealed class PluginHost : IDisposable
 
     // ---------------------------------------------------------------- 加载 / 卸载
 
-    /// <summary>加载插件实例并调用 Initialize（必须在 UI 线程）。</summary>
+    /// <summary>
+    /// 加载插件实例并调用 Initialize（必须在 UI 线程执行）。
+    ///
+    /// 分步骤：
+    ///   1. 防御：已加载或重复文件直接返回；失败路径会把已建起来的上下文拆干净（见 catch）；
+    ///   2. 新建可回收 ALC：new PluginLoadContext(descriptor.FilePath) —— 注意默认 ALC 永远不能卸载，
+    ///      所以每个插件必须单独建 isCollectible: true 的 ALC，将来才能真的释放内存；
+    ///   3. 流式加载主程序集：LoadMainAssembly() 内部用 LoadFromStream 把 DLL 字节读进内存。好处是宿主
+    ///      不占文件句柄，卸载后能立刻删除 DLL；代价是插件里 Assembly.Location 为空（别用它当物理路径，
+    ///      要用 descriptor.FilePath / PluginContext.PluginDirectory）；
+    ///   4. 定位入口类型：优先用清单里记录的类型全名，找不到再退化为“第一个实现 IMinibarPlugin 的公开非抽象类”；
+    ///   5. 契约共享：插件 ALC 遇到 MiniBar.Sdk 会 return null 交回默认上下文。这点必须保证——否则插件 ALC
+    ///      与宿主各有一份 SDK 类型，instance is IMinibarPlugin 会恒为 false，后面 New 出来的实例套不进去；
+    ///   6. Activator.CreateInstance + instance.Initialize(facade)：facade 是 PluginContext，插件此后只能
+    ///      通过它触达宿主；Initialize 里插件通常会建计时器/订阅事件，这些都必须在 UI 线程，否则挂；
+    ///   7. 登记引用（LoadContext/Assembly/Instance/Facade）、触发 PluginLoaded 事件、通知状态变化。
+    ///
+    /// 为什么 Initialize 必须在 UI 线程：WPF 界面对象有线程亲和性，插件常在那里创建控件或订阅 Dispatcher，
+    /// 跨线程会抛 InvalidOperationException。本方法由 RescanAsync/SetEnabled 等在 UI 线程调用。
+    /// </summary>
     public bool LoadInstance(PluginDescriptor descriptor)
     {
         if (descriptor.IsLoaded || descriptor.IsDuplicate)
@@ -420,7 +498,12 @@ public sealed class PluginHost : IDisposable
         }
     }
 
-    /// <summary>卸载插件（可选删除文件）。</summary>
+    /// <summary>卸载插件（可选同时删除 DLL 文件）。</summary>
+    /// <summary>
+    /// 公开卸载入口：先关掉该插件的浮层面板（避免面板引用着已卸载的内容），再 UnloadInstance；
+    /// deleteFile=true 时一并删除 DLL。最后刷新图标、通知状态变化、触发 LayoutChanged 让任务栏重排。
+    /// 返回是否成功卸载（与删除结果做 & 合并）。
+    /// </summary>
     public bool Unload(PluginDescriptor descriptor, bool deleteFile = false)
     {
         AppServices.Shell?.ClosePanel(descriptor.Id);
@@ -438,6 +521,24 @@ public sealed class PluginHost : IDisposable
         return removed;
     }
 
+    /// <summary>
+    /// 真正执行卸载的小核心（被 Unload/SetEnabled(false)/Reload/Dispose 共用）。
+    ///
+    /// 分步骤：
+    ///   1. 已无实例且无上下文 → 直接置 IsLoaded=false 返回（幂等）；否则先取消快捷键注册；
+    ///   2. 调用 instance.Dispose()：插件应当在这里停掉计时器、断开事件订阅、释放非托管资源。这一步最关键——
+    ///      只要插件里还残留任何“活引用”（静态字段、没停的 DispatcherTimer、仍被宿主事件持有的委托），
+    ///      collectible ALC 就永远回收不了；
+    ///   3. 把 Instance/Facade/Assembly 引用全部置 null，断开宿主侧到插件对象的引用链；
+    ///   4. context.Unload()：只是“标记该 ALC 可回收”，并不会立刻回收内存；
+    ///   5. 主动 GC.Collect() + WaitForPendingFinalizers() 催两轮：把“禁用/删除”之后本应释放的内存立刻降下来，
+    ///      而不是等下一次不确定何时到来的 GC（否则任务管理器读数迟迟不降，用户以为没卸载干净）；
+    ///   6. AppServices.TrimMemory()：EmptyWorkingSet 把刚空出来的内存页还给系统，任务管理器读数立刻掉下来
+    ///      （实测空壳 + 4 插件约 109MB → 12MB）。
+    ///
+    /// 为什么必须手动催 GC：collectible ALC 的回收条件非常苛刻——所有从它加载的类型/实例都必须不可达。
+    /// 我们没法保证前面那些 Dispose/Timer 一定做干净，所以主动催两轮是最稳妥的下限保障。
+    /// </summary>
     private bool UnloadInstance(PluginDescriptor descriptor)
     {
         if (descriptor.Instance is null && descriptor.LoadContext is null)
@@ -493,8 +594,18 @@ public sealed class PluginHost : IDisposable
     }
 
     /// <summary>
-    /// 删除插件文件。安全约束：只允许删除两个插件目录内的文件，
-    /// 绝不会碰用户自己的目录（拖进来的 DLL 会先被复制到用户插件目录再加载）。
+    /// 删除插件文件（DLL + 同名 .pdb）。只删两个插件目录内的文件，绝不碰用户自己的目录。
+    ///
+    /// 分步骤：
+    ///   1. 安全检查 IsInsidePluginDirectory：只放行用户目录与内置目录内的文件。因为拖进来的 DLL 会先被
+    ///      复制到用户插件目录再加载，所以宿主从不会持有用户原始文件的删除权，避免误删用户数据；
+    ///   2. 删除 DLL 与同名 .pdb，做最多 12 次重试：卸载后文件句柄可能有极短的释放延迟（尤其防病毒扫描），
+    ///      直接删会偶发 IOException，重试 + 短休眠能扛过这个窗口；
+    ///   3. TryRemovePluginFolder：若插件放在用户目录的子目录且已空，把整个目录一起清掉（目录根/程序目录下的不动）；
+    ///   4. 持久化状态处理：被删的是“重复文件”时【绝不】动状态——那份状态属于真正加载着的那一个，否则会把
+    ///      正常插件的 Enabled/Pinned/Order 一起删掉；非重复的正常插件才 TryDropState（下次放回当全新插件）。
+    ///
+    /// 为什么重试删除：流式加载虽然不锁句柄，但 Windows + 杀软仍可能在毫秒级内短暂占用，单次删除容易失败。
     /// </summary>
     private bool DeletePluginFiles(PluginDescriptor descriptor)
     {
@@ -553,6 +664,10 @@ public sealed class PluginHost : IDisposable
         return ok;
     }
 
+    /// <summary>
+    /// 安全判定：path 是否落在用户插件目录或内置插件目录之内（用完整路径 + 目录分隔符比对，防 ../ 越界）。
+    /// 删除操作的前置闸门——只在“圈定范围内”才允许动文件。
+    /// </summary>
     private static bool IsInsidePluginDirectory(string path)
     {
         var full = Path.GetFullPath(path);
@@ -715,6 +830,10 @@ public sealed class PluginHost : IDisposable
         return descriptor.Id;
     }
 
+    /// <summary>
+    /// 把“插件目录之外”的 DLL 复制到用户插件目录。原因：宿主加载后不希望持有用户原始文件的句柄，也避免误删用户数据；
+    /// 同名且内容一致时直接复用；文件名冲突时自动改名（name (2).dll …）。复制后再走正常扫描/加载流程。
+    /// </summary>
     private static string CopyIntoUserPluginDirectory(string sourcePath)
     {
         Directory.CreateDirectory(AppPaths.UserPluginDirectory);
@@ -798,6 +917,10 @@ public sealed class PluginHost : IDisposable
     }
 
     /// <summary>按给定顺序重排固定项（拖拽结束 / 固定顺序变化时调用）。</summary>
+    /// <summary>
+    /// 拖拽重排后调用：按用户给的顺序把“固定项”的 Order 重写为 0..n-1，未固定的排在后面并顺延 Order，
+    /// 全部写盘并触发 LayoutChanged。保证插件管理器/任务栏的显示顺序与磁盘状态一致。
+    /// </summary>
     public void ApplyPinnedOrder(IReadOnlyList<PluginDescriptor> orderedPinned)
     {
         for (var i = 0; i < orderedPinned.Count; i++)
@@ -868,6 +991,10 @@ public sealed class PluginHost : IDisposable
 
     // ---------------------------------------------------------------- 快捷键
 
+    /// <summary>
+    /// 注册插件声明的全局快捷键。逐条调用 HotkeyManager.Register；若被系统/其它程序占用注册失败，
+    /// 通过插件的 OnHotkeyRegistrationFailed 回调告知插件（而不是静默失败）。无快捷键能力或宿主未就绪则跳过。
+    /// </summary>
     private void RegisterHotkeys(PluginDescriptor descriptor)
     {
         if (descriptor.Hotkeys is not { } hotkeys || AppServices.Hotkeys is null)
@@ -898,6 +1025,10 @@ public sealed class PluginHost : IDisposable
         AppServices.Hotkeys?.UnregisterPlugin(descriptor.Id);
     }
 
+    /// <summary>
+    /// 宿主主题切换后广播给所有插件：逐个通过各插件的 facade 触发 ThemeChanged 事件，
+    /// 让插件界面（使用 DynamicResource 绑定语义色）与宿主一起换肤。被 ShellService.OnThemeChanged 调用。
+    /// </summary>
     internal void RaiseThemeChanged()
     {
         foreach (var descriptor in Plugins)

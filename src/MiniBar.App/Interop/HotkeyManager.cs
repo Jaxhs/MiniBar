@@ -29,6 +29,9 @@ public sealed class HotkeyManager : IDisposable
 
     public void Attach(Window window)
     {
+        // WPF 的 Window 是托管对象，没有原生句柄。WindowInteropHelper 是"桥"：
+        // 它给这个托管窗口要/建一个真正的 Win32 句柄（HWND）。在窗口真正显示前句柄可能还是 Zero，
+        // 所以这里检查；若为零说明调用太早，需要先 EnsureHandle()。
         var handle = new WindowInteropHelper(window).Handle;
         if (handle == IntPtr.Zero)
         {
@@ -36,6 +39,10 @@ public sealed class HotkeyManager : IDisposable
         }
 
         _hwnd = handle;
+        // HwndSource 是把"托管 Dispatcher"和"原生窗口消息循环"连起来的对象。
+        // AddHook 让我们把一个函数（WndProc）挂进这个窗口的消息处理链：
+        // 之后凡是发到本窗口的 Windows 消息（包括系统发来的 WM_HOTKEY）都会先经过 WndProc，
+        // 我们就能在里面把热键事件分发给对应插件。
         _source = HwndSource.FromHwnd(handle);
         _source?.AddHook(WndProc);
     }
@@ -57,8 +64,14 @@ public sealed class HotkeyManager : IDisposable
     }
 
     /// <summary>
-    /// 注册快捷键。同一个 (插件, 热键) 组合只会注册一次；
-    /// 失败（通常是被别的程序占用）不会抛异常，而是记录在 <see cref="LastResult"/> 里回传给插件。
+    /// 注册一个全局快捷键。流程：
+    /// ① 用 "<c>插件ID::热键ID</c>" 去重，同一个组合只注册一次（避免重复占系统资源）；
+    /// ② 把 WPF 的 <c>Key</c> 转成 Windows 虚拟键码 <c>VK</c>，再拼上修饰符（Alt/Ctrl/Shift/Win）+ <c>MOD_NOREPEAT</c>
+    ///    （按住不连发）；
+    /// ③ 调 <c>RegisterHotKey</c> 向系统"认领"这个组合键。系统会把"按键→我们的窗口"绑定好，
+    ///    以后用户一按，系统就发一条 <c>WM_HOTKEY</c> 到我们的窗口过程（见 <see cref="WndProc"/>）；
+    /// ④ 成功就把 (自增 id → 插件/热键) 记进 <c>_map</c>，方便按键时反查是谁的；
+    ///    失败（多半是该组合已被别的程序占用）不抛异常，而是记进 <c>_lastResult</c> 回传给插件/写日志。
     /// </summary>
     public bool Register(string pluginId, string hotkeyId, HotkeyModifiers modifiers, Key key, string displayName)
     {
@@ -121,6 +134,12 @@ public sealed class HotkeyManager : IDisposable
         }
     }
 
+    /// <summary>
+    /// 窗口消息钩子（由 <see cref="Attach"/> 里的 <c>AddHook</c> 挂上）。
+    /// 当系统把 <c>WM_HOTKEY</c> 发到本窗口时，<c>wParam</c> 就是当初注册时拿到的那个 id；
+    /// 我们用它在 <c>_map</c> 里反查出"哪个插件的哪个热键被按了"，触发 <see cref="Triggered"/> 事件把结果分发出去，
+    /// 并把 <c>handled</c> 置 true，告诉系统"这条消息我已处理，别再往下传"。
+    /// </summary>
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == NativeMethods.WM_HOTKEY)

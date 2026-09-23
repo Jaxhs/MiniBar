@@ -1,3 +1,9 @@
+/// <summary>
+/// 本文件定义主题快照 <see cref="PluginTheme"/>：宿主把当前配色以“语义化颜色”形式交给插件。
+///
+/// <para>为了让插件<b>不依赖宿主的 WPF 资源字典</b>（否则 ALC 隔离下拿不到），这里只传递十六进制颜色字符串（#AARRGGBB）。
+/// 插件界面应始终用这些颜色，从而和宿主主题始终保持一致，换肤时也不用改代码。</para>
+/// </summary>
 namespace MiniBar.Sdk;
 
 /// <summary>
@@ -34,14 +40,19 @@ public sealed class PluginTheme
     /// <summary>次要文本色。</summary>
     public string Muted { get; }
 
+    /// <summary>边框 / 分隔线颜色。</summary>
     public string Border { get; }
 
+    /// <summary>主题强调色（按钮、高亮、链接等用色）。</summary>
     public string Accent { get; }
 
+    /// <summary>强调色之上的文字色（确保叠在 Accent 上仍清晰可读）。</summary>
     public string AccentForeground { get; }
 
+    /// <summary>危险 / 错误色（删除、告警等场景）。</summary>
     public string Danger { get; }
 
+    /// <summary>预设浅色主题。</summary>
     public static PluginTheme Light { get; } = new(
         isDark: false,
         background: "#F2FFFFFF",
@@ -53,6 +64,7 @@ public sealed class PluginTheme
         accentForeground: "#FFFFFFFF",
         danger: "#FFD93025");
 
+    /// <summary>预设深色主题。</summary>
     public static PluginTheme Dark { get; } = new(
         isDark: true,
         background: "#F21C1C1E",

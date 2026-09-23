@@ -13,17 +13,34 @@ using MiniBar.Sdk;
 namespace MiniBar.App.UI;
 
 /// <summary>
-/// 插件管理器：插件的一站式运维界面 —— 加载、启用、禁用、重新加载、卸载、删除、固定，
-/// 同时充当拖放区（把插件 DLL 拖进来即刻热加载）。
+/// 插件管理界面（用户控件版）。
+///
+/// <para>
+/// 原先是独立的 <c>PluginManagerWindow</c> 窗口，后来合并进设置窗口的「插件管理」页 ——
+/// 好处是"看插件、管插件、改插件设置"在同一个窗口里完成，不用在多个窗口之间来回切。
+/// </para>
+///
+/// <para><b>它负责的事</b>：</para>
+/// <list type="bullet">
+///   <item>列出所有插件（含被判定为"重复文件"的那些），显示状态、能力、文件与错误；</item>
+///   <item>单个插件：打开界面 / 固定 / 启用禁用 / 重新加载 / 打开设置 / 卸载并删除；</item>
+///   <item>批量：全部重新加载、全部卸载、重新扫描目录、打开插件目录；</item>
+///   <item>同时是<b>拖放区</b>：把 DLL 拖到这块区域上就会热加载。</item>
+/// </list>
+///
+/// <para>
+/// 数据源直接绑定 <see cref="PluginHost.Plugins"/>（一个 ObservableCollection），
+/// 所以插件增删时列表会自己刷新，不需要手动重建。
+/// </para>
 /// </summary>
-public partial class PluginManagerWindow : Window
+public partial class PluginManagerView : UserControl
 {
     private readonly PluginHost _plugins;
     private readonly ShellService _shell;
     private readonly SettingsService _settings;
     private bool _loadingUi;
 
-    public PluginManagerWindow(PluginHost plugins, ShellService shell, SettingsService settings)
+    public PluginManagerView(PluginHost plugins, ShellService shell, SettingsService settings)
     {
         _plugins = plugins;
         _shell = shell;
@@ -33,30 +50,31 @@ public partial class PluginManagerWindow : Window
 
         PluginList.ItemsSource = _plugins.Plugins;
 
+        // 初始化界面控件时先立个"正在装填"的旗子：否则给 CheckBox 赋初值会触发 Checked 事件，
+        // 把一个刚读出来的值又写回去（虽然结果一样，但会白白多写一次配置）
         _loadingUi = true;
         AutoLoadCheck.IsChecked = settings.Settings.AutoLoadPluginOnDllDrop;
         _loadingUi = false;
 
-        PathHint.Text = AppPaths.UserPluginDirectory;
-        UserDirText.Text = $"用户插件目录：{AppPaths.UserPluginDirectory}";
+        UserDirText.Text = $"用户插件目录（可写，放进来即被发现）：{AppPaths.UserPluginDirectory}";
 
         ((INotifyCollectionChanged)_plugins.Plugins).CollectionChanged += OnPluginsCollectionChanged;
         _plugins.LayoutChanged += OnLayoutChanged;
-        Closed += OnClosed;
 
-        SourceInitialized += (_, _) =>
-        {
-            WindowDressingService.SetDarkTitleBar(this, AppServices.Theme?.IsDark ?? false);
-        };
+        // 控件从设置窗口的导航切走时会被"卸载"，此时必须退订，否则插件增删会去碰已经不在界面上的元素
+        Unloaded += OnUnloaded;
 
         DragOver += OnDragOver;
         DragLeave += OnDragLeave;
         Drop += OnDrop;
 
+        // UserControl 没有窗口级的右键处理，自己订阅
+        MouseRightButtonUp += OnMouseRightButtonUp;
+
         UpdateEmptyState();
     }
 
-    private void OnClosed(object? sender, EventArgs e)
+    private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         ((INotifyCollectionChanged)_plugins.Plugins).CollectionChanged -= OnPluginsCollectionChanged;
         _plugins.LayoutChanged -= OnLayoutChanged;
@@ -161,7 +179,31 @@ public partial class PluginManagerWindow : Window
 
     private void OnOpenFolderClick(object sender, RoutedEventArgs e) => OpenInExplorer(AppPaths.UserPluginDirectory);
 
-    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
+    /// <summary>
+    /// "从文件加载…"：用系统的文件选择框挑一个 DLL 并热加载。
+    /// 与"把文件拖进来"效果完全一样（内部都走 ShellService.LoadPlugin，最终到 PluginHost.LoadPluginFile）。
+    /// </summary>
+    private void OnLoadFromFileClick(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "选择插件 DLL",
+            Filter = "MiniBar 插件 (*.dll)|*.dll|所有文件 (*.*)|*.*",
+            CheckFileExists = true,
+            Multiselect = true,
+            InitialDirectory = Directory.Exists(AppPaths.UserPluginDirectory) ? AppPaths.UserPluginDirectory : AppPaths.BaseDirectory,
+        };
+
+        if (dialog.ShowDialog() != true)
+        {
+            return;
+        }
+
+        foreach (var file in dialog.FileNames)
+        {
+            _shell.LoadPlugin(file);
+        }
+    }
 
     private void OnAutoLoadChanged(object sender, RoutedEventArgs e)
     {
@@ -230,10 +272,8 @@ public partial class PluginManagerWindow : Window
 
     // ---------------------------------------------------------------- 右键
 
-    protected override void OnMouseRightButtonUp(MouseButtonEventArgs e)
+    private void OnMouseRightButtonUp(object sender, MouseButtonEventArgs e)
     {
-        base.OnMouseRightButtonUp(e);
-
         var descriptor = FindDescriptorUnder(e.OriginalSource);
         var menu = new ContextMenu { Style = (Style)FindResource("MiniBarContextMenuStyle") };
 

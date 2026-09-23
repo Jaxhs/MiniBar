@@ -18,7 +18,14 @@ public sealed class PluginState
 
 /// <summary>
 /// 插件状态持久化（%APPDATA%\MiniBar\plugins.json）。
-/// 只存“用户意图”，不存运行状态 —— 所以复制一份配置文件就能还原整套插件布局。
+/// 只存“用户意图”（Enabled/Pinned/Order/FilePath），不存运行状态 —— 所以复制一份配置文件就能还原整套插件布局。
+///
+/// 新手须知：
+///   · 它在内存里用 Dictionary&lt;string, PluginState&gt;（以插件 ID 为键）保存，所有读改写都先动内存，Save() 时才整体序列化
+///     成 JSON 写盘（JsonSerializer）。用 Dictionary 是为了 O(1) 按 ID 查状态；
+///   · GetOrCreate 是关键：扫描到新插件时，先在磁盘文件里找旧状态“合并”过来（保留用户之前设置的固定/启用），
+///     找不到才用清单默认值新建。这就是“文件删了放回来，固定位置还在”的来源；
+///   · 它不负责“重复文件”的状态归属——那是 PluginHost 的纪律：删除重复文件绝不能动真正加载着的那一个的状态。
 /// </summary>
 public sealed class PluginStateStore
 {
@@ -65,6 +72,7 @@ public sealed class PluginStateStore
         return state;
     }
 
+    /// <summary>把内存里的状态字典整体用 JsonSerializer 序列化成 plugins.json 写盘（整体覆盖，简单且不容易写花）。</summary>
     public void Save() => _settings.WriteJson(AppPaths.PluginStateFile, _states);
 
     /// <summary>把 Order 规整为 0..n-1 的连续序号。</summary>

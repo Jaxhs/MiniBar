@@ -121,14 +121,30 @@ public static class DisplayService
     public static Point GetCursorPositionPixels() =>
         NativeMethods.GetCursorPos(out var pt) ? new Point(pt.X, pt.Y) : new Point(0, 0);
 
-    /// <summary>窗口所在显示器的缩放系数（1.0 = 96 DPI）。</summary>
+    /// <summary>
+    /// 窗口所在显示器的缩放系数（1.0 = 100% = 96 DPI）。
+    /// <para>
+    /// <b>DIP 与物理像素的换算公式（务必记牢）：</b>
+    /// 物理像素 = DIP × 缩放系数；DIP = 物理像素 ÷ 缩放系数。
+    /// 本程序所有"想在哪个逻辑位置"的计算用 DIP，所有"真正交给 Win32"的调用（<see cref="PlaceWindow"/>、
+    /// <see cref="GetWindowRect"/>）都先乘回物理像素。漏掉这一步，高缩放下窗口就会错位。
+    /// </para>
+    /// </summary>
     public static double GetScale(IntPtr hwnd)
     {
         var dpi = hwnd != IntPtr.Zero ? NativeMethods.GetDpiForWindow(hwnd) : 96;
         return dpi <= 0 ? 1.0 : dpi / 96.0;
     }
 
-    /// <summary>以像素为单位给窗口定位（绕过 WPF 的 DIP 换算，PerMonitorV2 下最稳）。</summary>
+    /// <summary>
+    /// 以<b>像素</b>为单位给窗口定位（底层走 <c>SetWindowPos</c>）。
+    /// <para>
+    /// <b>为什么不用 WPF 的 <c>Window.Left/Top</c>？</b> WPF 的 Left/Top 是 DIP（逻辑像素），
+    /// 框架会按"窗口所在显示器的 DPI"帮你换算成物理像素。问题在于：当窗口跨显示器、或程序启动瞬间
+    /// 还不知道自己会在哪块屏时，WPF 用的 DPI 可能跟"最终落位那块屏"不一致，结果位置偏掉
+    /// （125% 缩放下能差出一截）。所以本项目一律用物理像素 + <c>SetWindowPos</c> 自己算、自己定位，最稳。
+    /// </para>
+    /// </summary>
     public static void PlaceWindow(IntPtr hwnd, Rect pixelRect, bool topmost = true)
     {
         if (hwnd == IntPtr.Zero)
@@ -167,7 +183,11 @@ public static class DisplayService
             (topmost ? 0u : NativeMethods.SWP_NOOWNERZORDER));
     }
 
-    /// <summary>当前窗口在屏幕上的像素矩形。</summary>
+    /// <summary>
+    /// 当前窗口在屏幕上的<b>物理像素</b>矩形（通过 <c>GetWindowRect</c> 取得）。
+    /// 注意它和 WPF 的 <c>ActualWidth/ActualHeight/Left/Top</c>（DIP）不是同一套单位，
+    /// 比较或换算时一定要先统一到同一单位，否则 125% 缩放下会差 1.25 倍。
+    /// </summary>
     public static Rect GetWindowRect(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero || !NativeMethods.GetWindowRect(hwnd, out var rect))

@@ -34,8 +34,19 @@ public sealed class PluginCandidate
 }
 
 /// <summary>
-/// 插件探测。只读元数据、不实例化、不留引用，探测完立刻卸载探测上下文。
-/// 这样即使某个 DLL 只是普通的类库（甚至是有问题的 DLL），也不会污染内存，更不会锁文件。
+/// 插件探测：判断“某个 DLL 到底是不是 MiniBar 插件”，并提取它的清单信息。
+///
+/// 核心设计——“探测不污染内存”：
+///   · 探测时把 DLL 加载进一个【临时 AssemblyLoadContext（ALC）】。ALC 是 .NET 里“加载 DLL”的容器，决定从哪找依赖、
+///     同名程序集算不算同一类型、以后能不能卸载。这里用的临时 ALC 是 isCollectible: true 的，读完元数据立刻 Unload；
+///   · 整个探测只做“读类型、读特性、列能力”，【绝不 new 插件实例】，因此不需要插件的依赖也能判断（见下）；
+///   · 结果用 PluginCandidate 这种纯字符串对象保存（id/名称/能力/图标），不持有任何来自插件 ALC 的类型或实例引用，
+///     于是临时 ALC 一卸载就彻底没有牵挂，能被 GC 回收；
+///   · 副作用：探测过程不会锁文件（不像 LoadFromAssemblyPath 会一直占着句柄），一个 DLL 哪怕不是插件、甚至已损坏，
+///     也不会把东西留在内存里——它只是“路过”被看了一眼。
+///
+/// AssemblyDependencyResolver：PluginLoadContext 内部用它根据 deps.json / 同目录 DLL 解析依赖。
+/// 但探测阶段其实只 GetTypes() 读元数据，并不真的解析/加载依赖，所以即便依赖缺失，也只是部分类型读不出（被 catch 容错）。
 /// </summary>
 public static class PluginScanner
 {
@@ -74,7 +85,11 @@ public static class PluginScanner
     }
 
     /// <summary>
-    /// 探测一个 DLL。返回 null 表示“不是 MiniBar 插件”（静默忽略，不打扰用户）。
+    /// 探测一个 DLL：在临时 ALC 里加载它、读出元数据、判断是否 MiniBar 插件。
+    /// 返回 null 表示“不是 MiniBar 插件”（静默忽略，不打扰用户）；非 null 即 PluginCandidate（纯字符串结果）。
+    ///
+    /// 为什么用 try/finally + context.Unload()：无论探测成功还是抛异常（DLL 损坏/不是程序集），临时 ALC 都会被卸载，
+    /// 不留任何引用在内存里——这正是“探测不污染内存”的保证。注意传入的路径必须是绝对路径，AssemblyDependencyResolver 才能解析。
     /// </summary>
     public static PluginCandidate? Probe(string dllPath, out string? error)
     {

@@ -1,3 +1,19 @@
+/// <summary>
+/// 本文件是整个插件系统的“总契约入口”：定义了插件必须实现的根接口 <see cref="IMinibarPlugin"/>，
+/// 以及宿主注入给插件的运行环境 <see cref="IPluginContext"/> 与日志接口 <see cref="IPluginLogger"/>。
+///
+/// <para><b>新手必读 —— 为什么这个程序集（MiniBar.Sdk）必须全进程唯一：</b>
+/// 每个插件都运行在自己独立、可回收的 <see cref="System.Runtime.Loader.AssemblyLoadContext"/>（ALC）里，
+/// 插件 DLL 用“流式加载”（LoadFromStream）读入，所以宿主不占用插件文件句柄，卸载后能立刻删除文件。
+/// 但契约类型（IMinibarPlugin 等）必须让“宿主”和“插件”看到的是同一个类型。
+/// 若插件目录里带了 MiniBar.Sdk.dll 副本，插件里的 IMinibarPlugin 与宿主里的就会变成两个不同类型，
+/// <c>is IMinibarPlugin</c> 永远为 false，于是插件加载失败。
+/// 因此插件工程必须把 MiniBar.Sdk 设为“不复制”的引用（Copy Local = false）。</para>
+///
+/// <para><b>卸载与 Dispose：</b>插件被禁用/卸载时宿主会调用 <see cref="IDisposable.Dispose"/>。
+/// 插件<b>必须在 Dispose 里停掉计时器、断开事件订阅</b>，否则该 ALC 无法被回收，
+/// 表现就是“禁用插件后内存不降”。本接口派生自 IDisposable，正是为了强调这一点。</para>
+/// </summary>
 using System.Windows;
 
 namespace MiniBar.Sdk;
@@ -15,14 +31,19 @@ public interface IMinibarPlugin : IDisposable
     void Initialize(IPluginContext context);
 }
 
+/// <summary>宿主提供的日志接口。插件用它与宿主共用同一个日志通道（文件 / 输出窗），便于排查问题。</summary>
 public interface IPluginLogger
 {
+    /// <summary>调试级：开发期的细节，正式环境通常过滤掉。</summary>
     void Debug(string message);
 
+    /// <summary>信息级：正常的、值得记录的状态变化。</summary>
     void Info(string message);
 
+    /// <summary>警告级：出了点小问题但还能跑，可附带异常。</summary>
     void Warn(string message, Exception? exception = null);
 
+    /// <summary>错误级：功能失败，必须记录，可附带异常。</summary>
     void Error(string message, Exception? exception = null);
 }
 

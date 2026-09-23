@@ -101,6 +101,11 @@ public sealed class AppSettings
     /// <summary>插件私有配置：插件 ID → (键 → JSON 文本)。由 IPluginContext.GetSetting/SetSetting 读写。</summary>
     public Dictionary<string, Dictionary<string, string>> PluginSettings { get; set; } = new();
 
+    /// <summary>
+    /// 深拷贝一份配置。实现很取巧：用 <c>System.Text.Json.JsonSerializer</c> 先把自己序列化成 JSON 文本，
+    /// 再反序列化成全新的对象。好处是不用手写一个字段一个字段地复制，加字段也不会漏。
+    /// 反序列化失败（理论上极少见）时回退到一份默认配置。
+    /// </summary>
     public AppSettings Clone()
     {
         var json = System.Text.Json.JsonSerializer.Serialize(this);

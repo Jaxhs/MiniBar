@@ -9,8 +9,14 @@ using MiniBar.Sdk;
 namespace MiniBar.App.Services;
 
 /// <summary>
-/// 宿主自己的设置，也实现成 <see cref="PluginSettingsSection"/> 列表 ——
-/// 于是设置窗口只需要一套渲染逻辑，"宿主设置"和"插件设置"长得一模一样。
+/// 宿主自己的设置，也实现成 <see cref="PluginSettingsSection"/> / <see cref="PluginSettingItem"/> 列表 ——
+/// 于是设置窗口只需要【一套渲染逻辑】，"宿主设置"和"插件设置"长得一模一样。这是个值得记住的设计：
+/// 把“宿主设置”伪装成“一个插件的设置”，复用同一套 Section/Item 模型与同一套 XAML 渲染，省掉一整套重复 UI 代码。
+///
+/// 两个新手易踩的坑（本类已正确处理）：
+///   · 滑块类（Number）设置项必须“先给初值、再订阅 ValueChanged”：本类用 GetValue = () =&gt; value 把【当前值】作为初值，
+///     只有用户真正拖动才触发 SetValue → setter 写盘。若反过来一渲染就把配置“顺手”写一遍，会导致默认值被覆盖、设置漂移；
+///   · 设置项工厂 Item 全部走 GetValue/SetValue 委托，读是即时求值（闭包捕获当前 S.xxx），写才落盘 + 应用，渲染过程零副作用。
 /// </summary>
 public sealed class HostSettingsProvider
 {
@@ -38,6 +44,11 @@ public sealed class HostSettingsProvider
         "左上", "顶部居中", "右上", "左下", "底部居中", "右下",
     };
 
+    /// <summary>
+    /// 把宿主全部设置编译成一组 PluginSettingsSection（每个 Section 一组相关设置项）。设置窗口直接遍历它渲染，
+    /// 因此“宿主设置页”与“插件设置页”共用同一套渲染管线——这正是本类的存在意义（统一模型消除重复代码）。
+    /// 用 yield return 惰性产出，新增一组设置只加一个 yield return 即可。
+    /// </summary>
     public IEnumerable<PluginSettingsSection> Build()
     {
         yield return new PluginSettingsSection
@@ -412,7 +423,11 @@ public sealed class HostSettingsProvider
         }
     }
 
-    /// <summary>设置项工厂的薄封装，纯粹为了让上面的声明读起来短一点。</summary>
+    /// <summary>
+    /// 设置项工厂（薄封装）：把“一个开关/数字/下拉/按钮/说明”构造成统一的 PluginSettingItem。
+    /// 关键点：每个 Item 都用 GetValue（读当前值，渲染时不会触发写）与 SetValue（用户改了才落盘+应用）两层委托，
+    /// 所以渲染设置页本身不会意外改写配置——这正是“滑块先赋初值再订阅”得以成立的基础。
+    /// </summary>
     private static class Item
     {
         public static PluginSettingItem Toggle(bool value, Action<bool> setter, string label, string? description = null) => new()
@@ -434,6 +449,8 @@ public sealed class HostSettingsProvider
             Minimum = min,
             Maximum = max,
             Step = step,
+            // 关键：GetValue 直接返回闭包捕获的初值 value —— 渲染时读到的是“当前配置”，不会触发写；
+            // 只有用户拖动才走 SetValue → setter 落盘。这就是“滑块先赋初值再订阅 ValueChanged”的具体实现。
             GetValue = () => value,
             SetValue = v => setter(v is double d ? d : value),
         };

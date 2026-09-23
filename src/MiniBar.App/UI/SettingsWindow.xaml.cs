@@ -13,20 +13,47 @@ using MiniBar.Sdk;
 namespace MiniBar.App.UI;
 
 /// <summary>
-/// 设置窗口。左侧是"宿主设置 + 每个插件"的导航，右侧按 <see cref="PluginSettingsSection"/>
-/// 渲染卡片 —— 宿主自己的设置也走同一套模型，所以插件设置和宿主设置长得完全一样。
+/// 设置窗口 —— <b>本程序唯一的"管理界面"</b>。
+///
+/// <para><b>布局</b>：左侧是导航（宿主设置 → 插件管理 → 每个插件），右侧是按
+/// <see cref="PluginSettingsSection"/> 渲染出来的卡片。原来那个独立的"插件管理窗口"已经合并进
+/// 「插件管理」这一页，于是"看插件 / 管插件 / 改插件设置"都在同一个窗口里完成。</para>
+///
+/// <para><b>为什么宿主设置和插件设置长得一样</b>：因为宿主把自己的设置也包装成了
+/// <see cref="PluginSettingsSection"/>（见 Services/HostSettingsProvider.cs），
+/// 渲染逻辑只有一套 —— 这是"统一模型消除重复代码"的典型做法。</para>
+///
+/// <para><b>谁负责什么</b></para>
+/// <list type="bullet">
+///   <item>插件只声明"有哪些设置项、怎么读、怎么写"（GetValue/SetValue）；</item>
+///   <item>本窗口负责画控件、把用户改动的值回传；</item>
+///   <item>值的持久化由 <c>IPluginContext.GetSetting/SetSetting</c> 完成，落盘在 %APPDATA%\MiniBar\settings.json。</item>
+/// </list>
+///
+/// <para><b>新手看代码的顺序</b>：BuildNav（导航）→ Render（分发）→ BuildSection/BuildItem/CreateControl
+/// （渲染一条设置项）→ Commit（写回）。插件侧对应 ISettingsPlugin，示例见久坐提醒插件。</para>
 /// </summary>
 public partial class SettingsWindow : Window
 {
+    /// <summary>
+    /// 左侧导航里的一项。三种可能：宿主设置、插件管理页、某个插件。
+    /// 用一个类而不是字符串，是为了让模板能同时显示图标、副标题和状态小圆点。
+    /// </summary>
     public sealed class NavItem
     {
+        /// <summary>导航项标题（宿主设置 / 插件管理 / 插件显示名）。</summary>
         public required string Title { get; init; }
 
         public string Subtitle { get; init; } = string.Empty;
 
+        /// <summary>导航项图标。PluginIcon 支持 emoji、字体图标、图片三种写法（见 SDK 里的说明）。</summary>
         public PluginIcon Icon { get; init; } = PluginIcon.Default;
 
+        /// <summary>对应的插件；为 null 表示这一项不是插件（是宿主设置或插件管理页）。</summary>
         public PluginDescriptor? Descriptor { get; init; }
+
+        /// <summary>这一项是不是"插件管理"页（不是某个插件，也不是宿主设置）。</summary>
+        public bool IsManagerPage { get; init; }
 
         /// <summary>已启用且已加载 —— 导航右侧显示一个小圆点。</summary>
         public bool IsActive => Descriptor is { IsEnabled: true, IsLoaded: true };
@@ -41,6 +68,7 @@ public partial class SettingsWindow : Window
     private bool _rendering;
     private bool _rebuildQueued;
 
+    /// <summary>构造设置窗口：记住三个服务、建好左侧导航，并订阅"插件清单变化"事件。</summary>
     public SettingsWindow(PluginHost plugins, SettingsService settings, ShellService shell)
     {
         _plugins = plugins;
@@ -62,12 +90,25 @@ public partial class SettingsWindow : Window
         BuildNav();
     }
 
+    /// <summary>插件被启用/禁用/删除后重建导航（用 BeginInvoke 延后，避免在插件集合变更的中途改界面）。</summary>
     private void OnPluginsChanged(object? sender, EventArgs e) =>
         Dispatcher.BeginInvoke(new Action(BuildNav));
 
-    /// <summary>从插件管理器跳过来时直接定位到某个插件。</summary>
+    /// <summary>从插件管理器跳过来时直接定位到某个插件（或插件管理页）。</summary>
     public void SelectPlugin(string pluginId)
     {
+        if (string.Equals(pluginId, ShellService.PluginManagerPage, StringComparison.OrdinalIgnoreCase))
+        {
+            var manager = _nav.FirstOrDefault(n => n.IsManagerPage);
+
+            if (manager is not null)
+            {
+                NavList.SelectedItem = manager;
+            }
+
+            return;
+        }
+
         var target = _nav.FirstOrDefault(n =>
             n.Descriptor is not null && string.Equals(n.Descriptor.Id, pluginId, StringComparison.OrdinalIgnoreCase));
 
@@ -79,6 +120,7 @@ public partial class SettingsWindow : Window
 
     // ---------------------------------------------------------------- 导航
 
+    /// <summary>重建左侧导航：宿主设置 → 插件管理 → 每个插件（按用户在任务栏上排的顺序）。</summary>
     private void BuildNav()
     {
         var selectedId = (NavList.SelectedItem as NavItem)?.Descriptor?.Id;
@@ -90,6 +132,15 @@ public partial class SettingsWindow : Window
             Title = "宿主设置",
             Subtitle = "任务栏本身的行为",
             Icon = "glyph:E713",
+        });
+
+        // 插件管理页：加载 / 启用 / 卸载 / 删除 / 使用说明，全都在这一个页面里
+        _nav.Add(new NavItem
+        {
+            Title = "插件管理",
+            Subtitle = "加载 · 启用 · 卸载 · 删除 · 使用说明",
+            Icon = "glyph:E8FD",
+            IsManagerPage = true,
         });
 
         foreach (var descriptor in _plugins.Plugins.Where(p => !p.IsDuplicate).OrderBy(p => p.Order))
@@ -116,10 +167,16 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>导航选中项变化 → 重画右侧内容。</summary>
     private void OnNavSelectionChanged(object sender, SelectionChangedEventArgs e) => Render();
 
     // ---------------------------------------------------------------- 渲染
 
+    /// <summary>
+    /// 重画右侧内容区。这里是整个窗口的"总调度"：
+    /// 宿主设置 → 渲染宿主自己那几个分组；插件管理 → 渲染管理控件；某个插件 → 渲染它的设置页。
+    /// <para>用 try/catch 包住：插件提供的设置项如果写崩了，也只影响这一页，不至于把整个窗口弄死。</para>
+    /// </summary>
     private void Render()
     {
         if (_rendering)
@@ -134,6 +191,12 @@ public partial class SettingsWindow : Window
 
             if (NavList.SelectedItem is not NavItem item)
             {
+                return;
+            }
+
+            if (item.IsManagerPage)
+            {
+                RenderPluginManager();
                 return;
             }
 
@@ -166,6 +229,11 @@ public partial class SettingsWindow : Window
     }
 
     /// <summary>改完设置后重建当前页（避免读到旧值），排队到当前事件之后执行。</summary>
+    /// <summary>
+    /// 改完设置后重建当前页（否则读到的是旧值）。
+    /// <para>排队到当前事件之后执行：如果直接在 ComboBox 的 SelectionChanged 里重建界面，
+    /// 会把正在处理事件的那个控件从树上摘掉，容易出怪问题。</para>
+    /// </summary>
     private void RequestRebuild()
     {
         if (_rebuildQueued)
@@ -180,6 +248,88 @@ public partial class SettingsWindow : Window
             _rebuildQueued = false;
             Render();
         }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// 渲染"插件管理"页：先给一段使用说明，再放插件管理控件（列表 + 拖放区 + 批量操作）。
+    ///
+    /// <para>
+    /// 插件管理控件每次渲染都**新建一个实例**：它没有需要跨渲染保留的状态（开关值都从配置读），
+    /// 新建比"复用实例 + 手动从旧父级摘下来"更省事，也避免"元素已经有一个父级"的异常。
+    /// </para>
+    /// </summary>
+    private void RenderPluginManager()
+    {
+        ContentHost.Children.Add(BuildUsageCard());
+        ContentHost.Children.Add(new PluginManagerView(_plugins, _shell, _settings));
+    }
+
+    /// <summary>插件管理的使用说明（用户明确要求要"使用说明"，所以写得具体、覆盖常见疑问）。</summary>
+    private FrameworkElement BuildUsageCard()
+    {
+        var stack = new StackPanel();
+
+        stack.Children.Add(new TextBlock
+        {
+            Text = "使用说明",
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0, 0, 0, 8),
+        });
+
+        var lines = new (string Glyph, string Text)[]
+        {
+            ("E896", "装插件：把 DLL 拖到下面这块区域或任务栏上；也可以复制到「用户插件目录」；还可以点「从文件加载…」。全部是热插拔，不用重启程序。"),
+            ("E8A7", "打开界面：点任务栏上的图标（或列表里的第一颗按钮）。插件有面板就会弹出来，再点一次关闭；中键点图标是「只关闭，不打开」。"),
+            ("E769", "启用 / 禁用：禁用会立刻卸载插件、把内存还给系统，但**DLL 与配置都保留**，随时能再启用。"),
+            ("E74D", "卸载并删除：先卸载再删掉 DLL（不可恢复）。只能删这两个插件目录里的文件；从外面拖进来的 DLL 会先复制到用户插件目录，所以不会误删你自己的文件。"),
+            ("E718", "固定与排序：这里点图钉固定到任务栏；任务栏上直接拖拽图标就能排序，顺序会记住。"),
+            ("E7BA", "「重复文件」是什么：同一个插件 id 在内置目录和用户目录各有一份时，**修改时间新的那份生效**，另一份标成「重复文件」且不加载。把多余的那份删掉即可。"),
+            ("E713", "插件设置：左侧导航里每个插件都有自己的设置页；插件没提供设置项时，那里会显示它的数据目录与启用/禁用入口。"),
+            ("E9D2", "数据在哪：配置 %APPDATA%\\MiniBar\\settings.json，启用与顺序 plugins.json，插件数据 data\\<插件ID>，日志 logs\\minibar.log；用户插件目录 %LOCALAPPDATA%\\MiniBar\\Plugins。"),
+            ("E8FD", "自己写插件：看 README 的《代码阅读导览》与 docs\\插件开发指南.md；plugins\\MiniBar.Plugin.SedentaryReminder 是注释最详细的范例。"),
+            ("E765", "快捷键：Ctrl+Alt+, 打开设置，Ctrl+Alt+P 直接跳到这一页，Ctrl+Alt+M 切换迷你模式，Ctrl+Alt+H 显示/隐藏任务栏。"),
+        };
+
+        foreach (var (glyph, text) in lines)
+        {
+            stack.Children.Add(BuildUsageLine(glyph, text));
+        }
+
+        return Card(stack);
+    }
+
+    /// <summary>说明里的一行：左边一个图标，右边自动换行的文字。</summary>
+    private static FrameworkElement BuildUsageLine(string glyph, string text)
+    {
+        var row = new Grid { Margin = new Thickness(0, 3, 0, 3) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var icon = new TextBlock
+        {
+            Text = char.ConvertFromUtf32(Convert.ToInt32(glyph, 16)),
+            FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+            FontSize = 12,
+            Margin = new Thickness(2, 1, 9, 0),
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+
+        Grid.SetColumn(icon, 0);
+        row.Children.Add(icon);
+
+        var label = new TextBlock
+        {
+            Text = text,
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            LineHeight = 19,
+            Foreground = (Brush)Application.Current.FindResource("MutedForegroundBrush"),
+        };
+
+        Grid.SetColumn(label, 1);
+        row.Children.Add(label);
+
+        return row;
     }
 
     private void RenderPlugin(PluginDescriptor descriptor)
@@ -226,6 +376,7 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>插件设置页顶部那张"名片"：图标、名称、版本、状态、能力、文件路径 + 三个操作按钮。</summary>
     private FrameworkElement BuildPluginHeader(PluginDescriptor descriptor)
     {
         var grid = new Grid();
@@ -308,6 +459,9 @@ public partial class SettingsWindow : Window
         return Card(grid);
     }
 
+    /// <summary>把一个设置分组渲染成一张卡片（标题 + 说明 + 若干设置项）。
+    /// <para>"分组"这个概念由插件自己声明（PluginSettingsSection），宿主只负责画。</para>
+    /// </summary>
     private FrameworkElement BuildSection(PluginSettingsSection section)
     {
         var host = new StackPanel();
@@ -372,6 +526,7 @@ public partial class SettingsWindow : Window
         return Card(host);
     }
 
+    /// <summary>渲染一条设置项：左边是标签与说明，右边是按 Kind 决定的控件。</summary>
     private FrameworkElement BuildItem(PluginSettingItem item)
     {
         if (item.Kind == PluginSettingKind.Info)
@@ -441,6 +596,17 @@ public partial class SettingsWindow : Window
         return row;
     }
 
+    /// <summary>
+    /// 根据设置项的类型造出对应控件 —— 这就是"宿主渲染、插件提供数据"的落点。
+    /// <list type="bullet">
+    ///   <item>Bool → CheckBox（勾选/取消各写一次配置）</item>
+    ///   <item>Choice → ComboBox（下拉选项由插件给）</item>
+    ///   <item>Number → Slider + 数值读数</item>
+    ///   <item>Text / Folder / File → TextBox（后两者带"浏览…"按钮）</item>
+    ///   <item>Action → 一个按钮</item>
+    /// </list>
+    /// <para><b>易踩的坑</b>：控件的初值要在<b>订阅事件之前</b>赋值，否则"渲染一次就把配置写一遍"。</para>
+    /// </summary>
     private FrameworkElement? CreateControl(PluginSettingItem item)
     {
         switch (item.Kind)
@@ -617,6 +783,7 @@ public partial class SettingsWindow : Window
         }
     }
 
+    /// <summary>把用户改动的值交回插件（插件在自己的回调里落盘并即时生效），出错只提示不崩。</summary>
     private void Commit(PluginSettingItem item, object? value, bool rebuild = true)
     {
         try
@@ -637,6 +804,7 @@ public partial class SettingsWindow : Window
 
     // ---------------------------------------------------------------- 小工具
 
+    /// <summary>统一外观的卡片容器（圆角 + 主题色背景与边框）。</summary>
     private FrameworkElement Card(UIElement content) => new Border
     {
         Margin = new Thickness(0, 0, 0, 12),
@@ -655,6 +823,7 @@ public partial class SettingsWindow : Window
         Foreground = Brush("MutedForegroundBrush"),
     });
 
+    /// <summary>做一个小按钮（统一的样式与悬浮提示）。</summary>
     private Button MakeButton(string text, Action action, string? tooltip, bool compact = false)
     {
         var button = new Button
@@ -677,6 +846,7 @@ public partial class SettingsWindow : Window
 
     private Brush Brush(string key) => (Brush)FindResource(key);
 
+    /// <summary>把配置里读出来的值（可能是 double / int / 字符串）统一转成 double，供滑块使用。</summary>
     private static double ToDouble(object? value) => value switch
     {
         double d => d,
@@ -696,6 +866,7 @@ public partial class SettingsWindow : Window
         return string.IsNullOrEmpty(suffix) ? text : $"{text} {suffix}";
     }
 
+    /// <summary>弹系统文件夹选择框（.NET 8 的 OpenFolderDialog）。取消时返回 null。</summary>
     private string? PickFolder(string current)
     {
         var dialog = new Microsoft.Win32.OpenFolderDialog { Title = "选择文件夹", Multiselect = false };
@@ -726,6 +897,7 @@ public partial class SettingsWindow : Window
         return dialog.ShowDialog(this) == true ? dialog.FileName : null;
     }
 
+    /// <summary>用资源管理器打开一个目录（不存在就先建出来）。</summary>
     private static void OpenPath(string path)
     {
         try

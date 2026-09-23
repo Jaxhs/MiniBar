@@ -1,3 +1,11 @@
+/// <summary>
+/// 本文件定义“全局快捷键”能力 <see cref="IHotkeyPlugin"/>，以及快捷键描述 <see cref="PluginHotkey"/>
+/// 与修饰键枚举 <see cref="HotkeyModifiers"/>。
+///
+/// <para>真正向系统注册/注销热键（RegisterHotKey）由宿主统一做，并处理冲突提示；
+/// 插件只需声明键位、在 <see cref="IHotkeyPlugin.OnHotkey"/> 里执行命令。
+/// 这样多个插件、宿主自己抢同一个组合键时，才不会各自注册导致混乱。</para>
+/// </summary>
 using System.Windows.Input;
 
 namespace MiniBar.Sdk;

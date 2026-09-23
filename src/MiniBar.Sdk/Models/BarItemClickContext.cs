@@ -1,3 +1,15 @@
+/// <summary>
+/// 本文件定义点击任务栏图标时传给插件的上下文 <see cref="BarItemClickContext"/> 与点击类型枚举 <see cref="BarItemActivationKind"/>。
+///
+/// <para>这里是“点击语义”的核心约定（踩过坑）：宿主先调 <c>OnClick</c>，再决定要不要自动开关面板。
+/// 详见本类 <see cref="BarItemClickContext"/> 的类型说明——核心记住一句话：<b>接管界面时只在
+/// <see cref="BarItemActivationKind.Primary"/>（左键）时动手</b>，中键/双击交给宿主默认处理，否则两边各 toggle 一次，
+/// 面板会“开一下马上关”。</para>
+///
+/// <para><b>MouseButton / ModifierKeys 是什么：</b><see cref="System.Windows.Input.MouseButton"/> 表示鼠标哪个键
+/// （左/中/右）；<see cref="System.Windows.Input.ModifierKeys"/> 表示按住的组合修饰键（Ctrl/Shift/Alt/Win）。
+/// 插件可用它们判断“用户是按着 Ctrl 点的吗”之类的场景。</para>
+/// </summary>
 using System.Windows.Input;
 
 namespace MiniBar.Sdk;
@@ -33,6 +45,10 @@ public enum BarItemActivationKind
 /// <b>要么自己接管</b>（例如想改成"右键才开面板"）。**不要两边都做** ——
 /// 宿主 toggle 一次 + 插件再 toggle 一次 = 面板开了马上又关，看起来就是"闪一下"。
 /// </para>
+///
+/// <para><b>补充（踩坑要点）：</b>若选择自己接管，请<b>只在
+/// <see cref="BarItemActivationKind.Primary"/>（左键单击）时</b>去动面板/迷你模式；
+/// 中键、双击的默认语义（如中键关闭面板）交给宿主处理，否则同样会造成“闪一下”或行为异常。</para>
 /// </summary>
 public sealed class BarItemClickContext
 {

@@ -601,6 +601,7 @@ public sealed class SedentaryReminderPlugin : IMinibarPlugin, ITaskButtonPlugin,
         _context.Shell.Notify($"已暂停 {minutes} 分钟", NotificationKind.Info);
     }
 
+    /// <summary>手动恢复计时：清掉暂停期限，把"这一轮起点"设到现在，并刷新界面。</summary>
     private void Resume()
     {
         _pausedUntil = null;
@@ -781,6 +782,7 @@ public sealed class SedentaryReminderPlugin : IMinibarPlugin, ITaskButtonPlugin,
         _timer.Start();
     }
 
+    /// <summary>停掉并彻底丢弃计时器，并精确取消事件订阅（用同一个 _tickHandler 字段，避免残留引用导致 ALC 回收不掉）。</summary>
     private void StopTimer()
     {
         if (_timer is null)

@@ -4,6 +4,14 @@ using MiniBar.App.Infrastructure;
 
 namespace MiniBar.App.Interop;
 
+/// <summary>
+/// 一次全屏检测的结果快照。
+/// <para>
+/// 用 <c>readonly record struct</c>：<c>record</c> 自带按值比较（两个结果所有字段相同就相等，
+/// 方便 <see cref="Poll"/> 用 <c>state == Current</c> 判断是否变了），<c>struct</c> 让它分配在栈上、
+/// 不用进GC堆（这种小对象每 700ms 创建一个，用 struct 几乎零开销），<c>readonly</c> 保证创建后不可改、线程安全。
+/// </para>
+/// </summary>
 public readonly record struct FullscreenState(
     bool IsFullscreen,
     IntPtr Window,
@@ -44,6 +52,12 @@ public sealed class FullscreenWatcher : IDisposable
 
     public FullscreenWatcher(int pollMs)
     {
+        // 这里用 DispatcherTimer，而不是 System.Timers.Timer —— 两者区别很关键：
+        //   · System.Timers.Timer 的 Elapsed 在"线程池线程"上触发，回调里不能直接碰 WPF 的 UI 对象
+        //     （会抛"跨线程访问"异常），必须 Dispatcher.Invoke 切回 UI 线程；
+        //   · DispatcherTimer 直接在 UI 线程（Dispatcher 队列）上触发，回调里能安全读写 WPF 对象，
+        //     且用 Background 优先级，保证不抢界面交互的响应。本项目轮询后要更新 UI 状态，所以用它就对了。
+        // （对比：AppLog、SettingsService 用 System.Timers.Timer 做"纯后台落盘"，不需要碰 UI，反而更省。）
         _timer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(Math.Max(200, pollMs)),
@@ -141,6 +155,16 @@ public sealed class FullscreenWatcher : IDisposable
         Changed?.Invoke(this, state);
     }
 
+    /// <summary>
+    /// 轮询式全屏判定（"腿一"）。分步：
+    /// ① 先看 <c>SHQueryUserNotificationState</c> 是否处于 D3D 独占全屏 / 演示模式 / 专注助手
+    ///    （<see cref="IsQuietTime"/>，这类全屏不一定有盖满屏的窗口）；
+    /// ② 取前台窗口 <c>GetForegroundWindow</c>，跳过本程序自己与桌面/任务栏等壳窗口；
+    /// ③ 确认它可见、未最小化；用 <c>GetWindowRect</c> 取它的物理像素矩形；
+    /// ④ 取它所在显示器的整屏范围（不是工作区），允许 1px 误差，判断矩形是否盖满整屏。
+    /// 任一步不满足就判为"非全屏"。这套轮询和 AppBar 的 <c>ABN_FULLSCREENAPP</c> 通知互补：
+    /// 通知更快但只在注册期间有效、对无边框全屏判定不准，轮询稳但慢，所以两条腿都要。
+    /// </summary>
     private FullscreenState Detect()
     {
         var quiet = IsQuietTime();

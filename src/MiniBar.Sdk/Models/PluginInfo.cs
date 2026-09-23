@@ -1,3 +1,7 @@
+/// <summary>
+/// 本文件定义插件运行状态快照 <see cref="PluginInfo"/>（只读，用于插件间协作、插件管理器展示与诊断），
+/// 以及能力名称常量 <see cref="PluginCapabilities"/>（用常量避免插件与宿主拼写不一致）。
+/// </summary>
 namespace MiniBar.Sdk;
 
 /// <summary>插件在宿主中的当前运行状态（只读快照，用于插件间协作与诊断）。</summary>
@@ -23,6 +27,7 @@ public sealed class PluginInfo
 
     public string? Version { get; }
 
+    /// <summary>插件 DLL 的完整路径（便于“在资源管理器里打开”“删除文件”等操作）。</summary>
     public string FilePath { get; }
 
     /// <summary>用户是否启用（持久化）。禁用后文件仍在，但不加载、不占内存。</summary>
@@ -34,6 +39,7 @@ public sealed class PluginInfo
     /// <summary>是否固定到任务栏显示区。</summary>
     public bool Pinned { get; }
 
+    /// <summary>本插件实现的能力列表（中文显示名，定义见 <see cref="PluginCapabilities"/>）。</summary>
     public string[] Capabilities { get; }
 
     /// <summary>加载/初始化失败原因。</summary>

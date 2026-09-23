@@ -28,6 +28,15 @@ public enum WindowDressing
 /// </summary>
 public static class WindowDressingService
 {
+    /// <summary>
+    /// 给窗口套上"工具窗口"外观与置顶之外的样式。
+    /// 关键是两个<b>扩展窗口样式位</b>（用 NativeMethods.SetExStyle 按位 OR/NOT 改 <c>GWL_EXSTYLE</c>）：
+    /// <list type="bullet">
+    ///   <item><description><c>WS_EX_TOOLWINDOW</c>：让窗口不出现在 Alt+Tab 切换列表、也不显示在自己任务栏上——本程序是常驻工具条，不该和正常程序抢位置。</description></item>
+    ///   <item><description><c>WS_EX_NOACTIVATE</c>：窗口被点中也不抢焦点，迷你窗口/提示气泡用这个，全屏游戏时点击不会把焦点从游戏里抢走。</description></item>
+    /// </list>
+    /// 另外对 Win11 请求圆角（不支持时静默失败）。窗口句柄同样通过 WindowInteropHelper 取得。
+    /// </summary>
     public static void Apply(Window window, WindowDressing dressing, bool noActivate = false)
     {
         var hwnd = new WindowInteropHelper(window).Handle;
@@ -62,6 +71,12 @@ public static class WindowDressingService
         NativeMethods.SetExStyle(hwnd, NativeMethods.WS_EX_NOACTIVATE, noActivate);
     }
 
+    /// <summary>
+    /// 设置<b>深色标题栏</b>。底层是 <c>DwmSetWindowAttribute</c> 的
+    /// <c>DWMWA_USE_IMMERSIVE_DARK_MODE</c>：让窗口标题栏（文字与边框）跟随深色外观。
+    /// 这是 Win10 20H1 / Win11 才支持的属性，老系统会调用失败，这里静默忽略即可。
+    /// 当程序主题切到深色时调用 <c>SetDarkTitleBar(window, true)</c>，浅色时传 false。
+    /// </summary>
     public static void SetDarkTitleBar(Window window, bool dark)
     {
         var hwnd = new WindowInteropHelper(window).Handle;

@@ -30,6 +30,12 @@ public sealed class AppBarService : IDisposable
     private const int ABN_FULLSCREENAPP = 0x02;
     private const int ABN_WINDOWARRANGE = 0x03;
 
+    /// <summary>
+    /// 本程序窗口的原生句柄（HWND）。<see cref="IntPtr"/> 在 64 位下是 8 字节，专门装这种"窗口身份证号"。
+    /// WPF 的 <c>Window</c> 是托管对象，拿不到原生句柄；要先通过
+    /// <c>new WindowInteropHelper(window).Handle</c> 把托管窗口"钉"出一个 HWND，再 <see cref="Attach"/> 进来。
+    /// 值为 <see cref="IntPtr.Zero"/> 表示还没拿到句柄（窗口还没真正创建）。
+    /// </summary>
     private IntPtr _hwnd;
     private bool _disposed;
 
@@ -70,7 +76,16 @@ public sealed class AppBarService : IDisposable
         return IsRegistered;
     }
 
-    /// <summary>注销 AppBar，把占用的屏幕空间还给系统。</summary>
+    /// <summary>
+    /// 注销 AppBar，把占用的屏幕空间还给系统。
+    /// <para>
+    /// <b>为什么这个调用一定要发生？</b>只要注册过 AppBar，系统就给本程序让出一条屏幕边。
+    /// 如果程序"没打招呼就消失"（隐藏、进迷你模式、正常退出，乃至被 <c>taskkill /F</c> 强杀），
+    /// 那条占位不会被自动回收，屏幕边缘会永久留一条空白/错位。所以<b>凡是离开 AppBar 状态都必须走
+    /// <see cref="Unregister"/>（ABM_REMOVE）</b>。强杀场景下进程来不及执行清理，因此需要宿主在
+    /// <c>ProcessExit</c> / <c>UnhandledException</c> / <c>SessionEnding</c> 等兜底回调里再尝试归还。
+    /// </para>
+    /// </summary>
     public void Unregister()
     {
         if (!IsRegistered || _hwnd == IntPtr.Zero)
@@ -148,7 +163,16 @@ public sealed class AppBarService : IDisposable
         return granted;
     }
 
-    /// <summary>窗口过程里调用，处理系统发来的 ABN_* 通知。返回 true 表示已处理。</summary>
+    /// <summary>
+    /// 窗口过程里调用，处理系统发来的 ABN_* 通知。返回 true 表示已处理。
+    /// <para>
+    /// <b>新手注意（AppBar 的经典坑）：</b>我们自己调用 <c>ABM_SETPOS</c>（见 <see cref="SetPosition"/>）之后，
+    /// Shell 会"回敬"一次 <c>ABN_POSCHANGED</c> 通知。如果收到通知就立刻又去 <c>SetPosition</c>，
+    /// 又会触发下一次通知，形成"设位置→被通知→再设位置"的死循环，CPU 会飙高。
+    /// 标准做法是：忽略"自己刚设完位置后 1 秒内"的 <c>ABN_POSCHANGED</c>（真正由分辨率变化/别的 AppBar
+    /// 引起的通知则照常处理）。本类只负责把通知转发出去，1 秒抑噪的节律由调用方/宿主把控。
+    /// </para>
+    /// </summary>
     public bool HandleMessage(int msg, IntPtr wParam, IntPtr lParam)
     {
         if (msg != CallbackMessage)
@@ -184,6 +208,15 @@ public sealed class AppBarService : IDisposable
         _ => 3,               // ABE_BOTTOM
     };
 
+    /// <summary>
+    /// 释放资源（实现 <see cref="IDisposable"/>）。
+    /// <para>
+    /// <b>IDisposable / using 是什么？</b> 当一个对象"占用了需要主动归还的资源"（窗口注册、句柄、计时器……），
+    /// 光等垃圾回收不够及时，于是实现 <c>IDisposable</c>，把"清理动作"写在 <c>Dispose</c> 里。
+    /// 调用方用 <c>using (var x = ...)</c> 时，离开作用域会自动调用 <c>Dispose</c>，相当于"离开即清理"，
+    /// 不用担心忘写。这里的 <c>Dispose</c> 负责 <see cref="Unregister"/>，把 AppBar 占用的屏幕空间还回去。
+    /// </para>
+    /// </summary>
     public void Dispose()
     {
         if (_disposed)

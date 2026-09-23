@@ -1,12 +1,34 @@
+/// <summary>
+/// 本文件定义宿主能力门面 <see cref="IShellService"/>（插件做不了的事都从这里申请：
+/// 开/关面板、迷你模式、通知、浮动窗口、热插拔 DLL 等），以及浮动窗口选项 <see cref="PluginWindowOptions"/>
+/// 与浮窗句柄 <see cref="IPluginWindow"/>。
+///
+/// <para>插件永远通过 <see cref="IPluginContext.Shell"/> 拿到这个门面，而不是直接 new 宿主类型，
+/// 这样契约程序集才能保持轻量、且与宿主 UI 解耦。</para>
+///
+/// <para><b>FrameworkElement 是什么：</b>WPF 里所有能参与界面布局的 UI 元素（按钮、文本、面板……）的共同基类。
+/// 这里多处要求插件返回 <see cref="FrameworkElement"/> 而不是某个具体控件，
+/// 宿主才能把“任意控件”塞进任务栏或浮窗，而不必关心它到底是什么。</para>
+///
+/// <para><b>IReadOnlyList&lt;T&gt; 是什么：</b>一种“只能看、不能改”的列表视图（可以读元素、数个数，但不能增删改）。
+/// 宿主把列表交给你是为了让你遍历/展示，千万不要试图往里 Add 或 Remove，否则会抛异常。</para>
+/// </summary>
 using System.Windows;
 
 namespace MiniBar.Sdk;
 
 public enum NotificationKind
 {
+    /// <summary>普通信息（默认样式）。</summary>
     Info,
+
+    /// <summary>成功（绿色系），例如“已保存”。</summary>
     Success,
+
+    /// <summary>警告（黄色系），例如“配置可能不完整”。</summary>
     Warning,
+
+    /// <summary>错误（红色系），例如“操作失败”。</summary>
     Error,
 }
 
@@ -21,10 +43,13 @@ public interface IShellService
 
     // ---- 面板（"打开/关闭界面"）----
 
+    /// <summary>打开指定插件的面板（浮层）。</summary>
     void OpenPanel(string pluginId);
 
+    /// <summary>关闭指定插件的面板。</summary>
     void ClosePanel(string pluginId);
 
+    /// <summary>切换指定插件的面板（开↔关）。</summary>
     void TogglePanel(string pluginId);
 
     /// <summary>关闭当前所有插件面板。</summary>
@@ -43,10 +68,12 @@ public interface IShellService
 
     // ---- 通知 ----
 
+    /// <summary>弹出一个通知（toast），kind 决定配色，duration 不传则走宿主默认时长。</summary>
     void Notify(string message, NotificationKind kind = NotificationKind.Info, TimeSpan? duration = null);
 
     // ---- 浮窗 ----
 
+    /// <summary>创建一个宿主托管的浮窗，内容为任意 <see cref="FrameworkElement"/>，出现在屏幕任意位置。</summary>
     IPluginWindow CreateWindow(string title, FrameworkElement content, PluginWindowOptions? options = null);
 
     // ---- 热插拔 ----
@@ -66,8 +93,10 @@ public interface IShellService
     /// </summary>
     bool ReloadPlugin(string pluginId);
 
+    /// <summary>指定插件当前是否已加载在内存中。</summary>
     bool IsPluginLoaded(string pluginId);
 
+    /// <summary>列出当前所有插件的状态快照（只读），用于插件间协作或诊断。</summary>
     IReadOnlyList<PluginInfo> GetPlugins();
 
     /// <summary>插件安装目录（用户级可写目录），把 DLL 复制进来即可被自动发现。</summary>
@@ -86,6 +115,7 @@ public interface IShellService
     void ShowSettings(string pluginId = "");
 }
 
+/// <summary>创建浮窗时的可选配置（位置、尺寸、置顶、标题栏等）。全部有合理默认值，按需覆盖即可。</summary>
 public sealed class PluginWindowOptions
 {
     /// <summary>屏幕坐标（像素）。为 null 时由宿主自动居中到鼠标所在显示器。</summary>
@@ -114,18 +144,25 @@ public sealed class PluginWindowOptions
 /// <summary>插件持有的一张浮窗句柄。</summary>
 public interface IPluginWindow
 {
+    /// <summary>浮窗当前是否可见。</summary>
     bool IsVisible { get; }
 
+    /// <summary>浮窗里显示的内容（任意 WPF 元素），可随时替换。</summary>
     FrameworkElement Content { get; set; }
 
+    /// <summary>浮窗标题（标题栏显示的文字）。</summary>
     string Title { get; set; }
 
+    /// <summary>显示浮窗。</summary>
     void Show();
 
+    /// <summary>隐藏浮窗（不销毁，可再次 Show）。</summary>
     void Hide();
 
+    /// <summary>把浮窗带到前台并激活（抢焦点）。</summary>
     void Activate();
 
+    /// <summary>关闭并销毁浮窗（释放资源）。</summary>
     void Close();
 
     /// <summary>窗口关闭（含用户点击关闭按钮）时触发。</summary>

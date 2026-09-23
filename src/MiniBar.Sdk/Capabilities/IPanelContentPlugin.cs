@@ -1,3 +1,15 @@
+/// <summary>
+/// 本文件定义“面板内容”能力：插件点任务栏图标后，从任务栏旁弹出的那块浮层里显示什么。
+/// 包含能力接口 <see cref="IPanelContentPlugin"/> 与面板和宿主的交互接口 <see cref="IPanelHost"/>。
+///
+/// <para><b>低内存占用的关键约定：</b>面板内容在“每次打开时创建、关闭时销毁”，宿主不会长期持有它。
+/// 因此插件<b>不要在 CreateContent 之外缓存面板里的宿主/控件引用</b>，并在 <see cref="IPanelContentPlugin.ReleaseContent"/>
+/// 里停掉计时器、断开事件，否则内存和句柄会泄漏（ALC 回收不掉）。</para>
+///
+/// <para><b>浮层里的排版限制（踩过坑）：</b>面板浮层<b>禁用了横向滚动</b>，因为开了会让 TextWrapping 失效。
+/// 文字放不下时请改用 <c>TextTrimming</c>（省略号）+ <c>ToolTip</c>；注意省略号要求容器有“确定宽度”，
+/// 在横向 StackPanel 里无效，需要用带固定/约束宽度的容器。</para>
+/// </summary>
 using System.Windows;
 
 namespace MiniBar.Sdk;
