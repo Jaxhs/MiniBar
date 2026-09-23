@@ -114,21 +114,39 @@
                                                         Margin="2,2,0,0" />
 
                                         <StackPanel Grid.Column="1" Margin="12,0,10,0">
-                                            <StackPanel Orientation="Horizontal">
-                                                <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                                <TextBlock Text="{Binding Version}"
-                                                           Margin="7,0,0,0"
-                                                           FontSize="11.5"
-                                                           VerticalAlignment="Center"
-                                                           Foreground="{DynamicResource MutedForegroundBrush}" />
-                                                <Border Margin="8,0,0,0"
+                                            <!-- 名字行用 Grid 而不是横向 StackPanel：
+                                                 横向 StackPanel 会给子元素无限宽度，TextTrimming 永远不会生效，
+                                                 插件名一长就直接被裁掉（"内容显示不全"）。
+                                                 Grid 的 * 列有确定宽度，省略号和悬停提示才能正常工作。 -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <StackPanel Grid.Column="0" Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               FontWeight="SemiBold"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding DisplayName}" />
+                                                    <TextBlock Text="{Binding Version}"
+                                                               Margin="7,0,0,0"
+                                                               FontSize="11.5"
+                                                               VerticalAlignment="Center"
+                                                               Foreground="{DynamicResource MutedForegroundBrush}" />
+                                                </StackPanel>
+
+                                                <Border Grid.Column="1"
+                                                        Margin="8,0,0,0"
                                                         Padding="6,1"
                                                         CornerRadius="6"
                                                         VerticalAlignment="Center"
                                                         Background="{DynamicResource SurfaceStrongBrush}">
                                                     <TextBlock Text="{Binding StatusText}" FontSize="11" />
                                                 </Border>
-                                                <Border Margin="5,0,0,0"
+                                                <Border Grid.Column="2"
+                                                        Margin="5,0,0,0"
                                                         Padding="6,1"
                                                         CornerRadius="6"
                                                         VerticalAlignment="Center"
@@ -138,11 +156,13 @@
                                                                FontSize="11"
                                                                Foreground="{DynamicResource AccentForegroundBrush}" />
                                                 </Border>
-                                            </StackPanel>
+                                            </Grid>
 
                                             <TextBlock Text="{Binding Id}"
                                                        FontSize="11"
                                                        Margin="0,3,0,0"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Id}"
                                                        Foreground="{DynamicResource MutedForegroundBrush}" />
 
                                             <TextBlock Text="{Binding Description}"

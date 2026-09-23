@@ -100,6 +100,17 @@ public sealed class HostSettingsProvider
                     Commit();
                 }, "任务栏厚度", "px", "仅在占用屏幕空间时生效"),
 
+                Item.Toggle(S.AutoHideSystemTaskbar, value =>
+                {
+                    S.AutoHideSystemTaskbar = value;
+                    Commit(true);
+
+                    // 立即把改动同步给系统（打开/关闭自动隐藏），退出时会自动恢复用户原设置
+                    App.ApplySystemTaskbarSetting();
+                }, "自动隐藏系统任务栏",
+                    "相当于替你勾选「任务栏设置 → 自动隐藏任务栏」：鼠标移到屏幕边缘才会出现；" +
+                    "MiniBar 退出时会恢复你原来的设置"),
+
                 Item.Choice(EdgeNames, EdgeNames[(int)S.Edge], value =>
                 {
                     if (Enum.TryParse<DockEdge>(NameOfEdge(Array.IndexOf(EdgeNames, value)), out var edge))

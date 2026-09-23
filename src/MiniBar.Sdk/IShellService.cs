@@ -60,6 +60,12 @@ public interface IShellService
     /// <summary>启用/禁用插件（禁用会立即卸载并从任务栏移除，但保留文件与配置）。</summary>
     void SetPluginEnabled(string pluginId, bool enabled);
 
+    /// <summary>
+    /// 重新加载插件，等价于插件管理器里的「重新加载」按钮。
+    /// 插件自己的设置影响到界面结构时（例如"要不要在任务栏显示读数"）可以调用它重建。
+    /// </summary>
+    bool ReloadPlugin(string pluginId);
+
     bool IsPluginLoaded(string pluginId);
 
     IReadOnlyList<PluginInfo> GetPlugins();

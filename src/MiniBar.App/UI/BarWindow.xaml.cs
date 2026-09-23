@@ -705,13 +705,15 @@ public partial class BarWindow : Window
             return;
         }
 
-        // 宿主默认行为：标准任务栏语义 —— 点一下切换该插件的界面
-        if (!ManagesOwnActivation(pressed) && pressed.HasPanel)
+        // 顺序很关键：**先**让插件处理（它可以在 OnClick 里自己开关面板、进迷你模式），
+        // 插件没动过界面时，宿主才套用"标准任务栏语义：点一下切换该插件的界面"。
+        // 如果反过来，宿主 toggle 一次、插件再 toggle 一次，面板就会开了立刻又关 —— 表现为"闪一下"。
+        var handledByPlugin = InvokePluginClick(pressed, BarItemActivationKind.Primary, MouseButton.Left);
+
+        if (!handledByPlugin && !ManagesOwnActivation(pressed) && pressed.HasPanel)
         {
             _shell.TogglePanel(pressed.Id);
         }
-
-        InvokePluginClick(pressed, BarItemActivationKind.Primary, MouseButton.Left);
     }
 
     private static bool ManagesOwnActivation(PluginDescriptor descriptor)
@@ -726,11 +728,12 @@ public partial class BarWindow : Window
         }
     }
 
-    private void InvokePluginClick(PluginDescriptor descriptor, BarItemActivationKind kind, MouseButton button)
+    /// <summary>把点击交给插件；返回 true 表示插件已经自己处理了界面（宿主不要再套默认行为）。</summary>
+    private bool InvokePluginClick(PluginDescriptor descriptor, BarItemActivationKind kind, MouseButton button)
     {
         if (descriptor.TaskButton is not { } taskButton || descriptor.Facade is null)
         {
-            return;
+            return false;
         }
 
         try
@@ -745,11 +748,13 @@ public partial class BarWindow : Window
                 Keyboard.Modifiers);
 
             taskButton.OnClick(context);
+            return context.ClickHandled;
         }
         catch (Exception ex)
         {
             AppLog.Error($"插件点击处理异常：{descriptor.Id}", ex);
             _shell.Notify($"「{descriptor.DisplayName}」出错：{ex.Message}", NotificationKind.Error);
+            return false;
         }
     }
 

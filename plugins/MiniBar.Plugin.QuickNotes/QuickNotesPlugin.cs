@@ -70,7 +70,15 @@ public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanel
 
     public string? Badge => _lineCount > 0 ? _lineCount.ToString() : null;
 
-    public void OnClick(BarItemClickContext context) => context.TogglePanel();
+    public void OnClick(BarItemClickContext context)
+    {
+        // 左键单击 → 插件自己开关面板（宿主看到 ClickHandled 后就不再重复切换）；
+        // 中键的"关闭界面"语义由宿主处理，这里不插手。
+        if (context.Kind == BarItemActivationKind.Primary)
+        {
+            context.TogglePanel();
+        }
+    }
 
     // ---------------------------------------------------------------- 面板
 
@@ -152,6 +160,9 @@ public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanel
             FontSize = 11,
             Margin = new Thickness(0, 6, 0, 0),
             Foreground = BrushFrom(_context.Theme.Muted),
+            // 这行里带着完整的文件路径，一定比面板宽：用省略号收尾 + 悬停看全文，
+            // 而不是让它撑出一条横向滚动条（见 FlyoutWindow 里关于横向滚动为什么被禁用的注释）
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
 
         var grid = new Grid();
@@ -356,6 +367,9 @@ public sealed class QuickNotesPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanel
 
         var chars = _editor?.Text.Length ?? 0;
         _status.Text = $"自动保存 · {_lineCount} 行 · {chars} 字 · {_filePath}";
+
+        // 文字被省略号截断时，悬停能看到完整内容（包含完整路径）
+        _status.ToolTip = $"自动保存 · {_lineCount} 行 · {chars} 字\n{_filePath}";
     }
 
     private void AppendText(string text)

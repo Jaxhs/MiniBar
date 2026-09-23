@@ -40,6 +40,9 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
     private DispatcherTimer? _timer;
 
     private TextBlock? _barText;
+
+    /// <summary>内嵌内容外面那层 Border（用来把"完整读数"同步到悬停提示上）。</summary>
+    private Border? _barWidgetBorder;
     private TextBlock? _compactText;
     private TextBlock? _panelCpu;
     private TextBlock? _panelMemory;
@@ -87,7 +90,14 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
 
     public bool BadgeIsAccent => _cpuPercent >= 80;
 
-    public void OnClick(BarItemClickContext context) => context.TogglePanel();
+    public void OnClick(BarItemClickContext context)
+    {
+        // 左键单击才由插件接管面板开关；中键的关闭语义交给宿主（详见 BarItemClickContext 的说明）。
+        if (context.Kind == BarItemActivationKind.Primary)
+        {
+            context.TogglePanel();
+        }
+    }
 
     // ---------------------------------------------------------------- 内嵌内容
 
@@ -102,22 +112,27 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
             Foreground = Accent(),
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Center,
+            // 空间不够时用省略号收尾（不会被硬切），悬停时提示里能看到完整读数
+            TextTrimming = TextTrimming.CharacterEllipsis,
         };
 
         UpdateBarText();
         EnsureTimer();
 
-        return new Border
+        _barWidgetBorder = new Border
         {
             Padding = new Thickness(4, 0, 4, 0),
             Child = _barText,
             ToolTip = "点击查看详细指标",
         };
+
+        return _barWidgetBorder;
     }
 
     public void ReleaseBarWidget()
     {
         _barText = null;
+        _barWidgetBorder = null;
         StopTimerIfIdle();
     }
 
@@ -309,7 +324,17 @@ public sealed class SystemMonitorPlugin : IMinibarPlugin, ITaskButtonPlugin, IBa
         _context.InvalidateBarItem();
     }
 
-    private void UpdateBarText() => SetText(_barText, $"C{_cpuPercent:0} M{MemoryUsedPercent():0}");
+    private void UpdateBarText()
+    {
+        var text = $"C{_cpuPercent:0} M{MemoryUsedPercent():0}";
+        SetText(_barText, text);
+
+        // 悬停提示里给出完整读数（文字被省略号截断时也不用猜）
+        if (_barWidgetBorder is not null)
+        {
+            _barWidgetBorder.ToolTip = $"CPU {_cpuPercent:0}% · 内存 {MemoryUsedPercent():0}%（点击查看详细指标）";
+        }
+    }
 
     private void UpdateCompactText() => SetText(_compactText, $"CPU {_cpuPercent:0}%  RAM {MemoryUsedPercent():0}%");
 

@@ -9,7 +9,7 @@
         Topmost="True"
         ResizeMode="NoResize"
         Width="380"
-        Height="320"
+        SizeToContent="Height"
         FontFamily="Microsoft YaHei UI, Segoe UI"
         FontSize="13"
         TextOptions.TextFormattingMode="Display"
@@ -67,9 +67,22 @@
                 </StackPanel>
             </Grid>
 
-            <ContentPresenter x:Name="ContentHost"
-                              Grid.Row="1"
-                              Margin="12,0,12,12" />
+            <!-- 内容区包一层 ScrollViewer：
+                 窗体高度是 SizeToContent="Height"（内容有多少就多高），
+                 上限由代码按屏幕可用空间设置 MaxHeight，
+                 所以内容再多也只会**纵向**滚动，不会被切掉。
+
+                 注意这里必须是 HorizontalScrollBarVisibility="Disabled"：
+                 一旦开横向滚动，内容会以"无限宽"去测量，TextWrapping 就永远不换行，
+                 长文字反而会被挤成一条横向滚动条 —— 正确做法是让文字换行，
+                 实在换不了行的（路径、文件名）由控件自己用省略号 + 悬停提示兜住。 -->
+            <ScrollViewer x:Name="ContentScroller"
+                          Grid.Row="1"
+                          Margin="12,0,12,12"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <ContentPresenter x:Name="ContentHost" />
+            </ScrollViewer>
         </Grid>
     </Border>
 </Window>

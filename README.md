@@ -24,7 +24,9 @@
 | 插件可出现在任意位置 | `IShellService.CreateWindow`、`IContextMenuPlugin`、`IBarWidgetPlugin`、`ISettingsPlugin` | 面板 / 迷你窗口 / 浮窗 / 任意菜单位置 / 设置页面，全部由插件声明 |
 | 拖拽文件或文件夹到程序上操作 | `BarWindow.OnFileDrop`、`MiniWindow`、`PluginManagerWindow`、`ShellService.HandleDrop` | 先问被拖到图标上的插件 → 再按顺序问其它拖放插件 → 都没人处理则走内置兜底 |
 | 拖入插件 DLL 直接加载 | `PluginHost.LoadPluginFile` | 自动复制到用户插件目录再加载（绝不留住外部文件句柄、也绝不误删用户自己的文件）；拖入**更新版本**会直接替换旧版本 |
-| 低内存占用 | 见下文第 6 节 | 实测：空壳 + 4 个插件常驻 **28~48 MB**，空闲裁剪后可降到 **12 MB** 量级 |
+| 低内存占用 | 见下文第 7 节 | 实测：空壳 + 4 个插件常驻 **28~48 MB**，空闲裁剪后可降到 **12 MB** 量级 |
+| 让系统任务栏自动隐藏 | `Interop/SystemTaskbar.cs` + 设置里的开关 | 用 Shell 自己的 `ABM_SETSTATE + ABS_AUTOHIDE`（就是"任务栏设置 → 自动隐藏任务栏"背后的调用），不是硬藏窗口 —— 所以占位会一起收掉，而且退出时能恢复用户原设置 |
+| 面板内容过多时不截断 | `UI/FlyoutWindow.xaml(.cs)` | 浮层高度改成"内容自适应 + 上限为屏幕可用高度"，超出部分出现滚动条；文字放不下时用 `…` 收尾并在悬停提示里给出全文 |
 
 ---
 
@@ -54,7 +56,29 @@ src/MiniBar.App/bin/Debug/MiniBar.exe
 
 ---
 
-## 3. 目录结构
+## 3. 代码阅读导览（建议按这个顺序看）
+
+想把它当学习材料的话，这个顺序最省力 —— 每个文件的开头都写了大段注释讲"为什么"：
+
+| 顺序 | 文件 | 你会学到 |
+| --- | --- | --- |
+| 1 | `src/MiniBar.App/App.xaml.cs` | 一个 WPF 程序的启动顺序为什么必须这样排；单实例转发；系统资源的退出兜底 |
+| 2 | `src/MiniBar.Sdk/IMinibarPlugin.cs`、`IShellService.cs` | 宿主与插件之间的"契约"长什么样；为什么要有一个独立的契约程序集 |
+| 3 | `src/MiniBar.App/Hosting/PluginLoadContext.cs` | **AssemblyLoadContext**：热插拔的技术地基；共享程序集与流式加载两条铁律 |
+| 4 | `src/MiniBar.App/Hosting/PluginHost.cs` | 扫描 → 探测 → 加载 → 卸载的完整生命周期；探测为什么不锁文件；卸载为什么要催 GC |
+| 5 | `src/MiniBar.App/Interop/AppBarService.cs` | **AppBar**：怎么像任务栏一样"占住"屏幕边缘，以及必须成对释放的理由 |
+| 6 | `src/MiniBar.App/Interop/DisplayService.cs` | DPI 与坐标空间：为什么定位窗口要用像素级 `SetWindowPos` |
+| 7 | `src/MiniBar.App/UI/BarWindow.xaml.cs` | 任务栏窗口：点击 / 中键 / 拖拽排序 / 拖放 / WndProc 钩子 |
+| 8 | `src/MiniBar.App/UI/FlyoutWindow.xaml.cs` | 面板浮层：为什么"失去焦点就关"要有例外，尺寸上限怎么算 |
+| 9 | `src/MiniBar.App/UI/SettingsWindow.xaml.cs`、`Services/HostSettingsProvider.cs` | 一套 UI 同时渲染"宿主设置"和"插件设置"的做法 |
+| 10 | `plugins/MiniBar.Plugin.SedentaryReminder/` | 一个功能完整的插件范例（7 种能力都用上了，注释非常啰嗦） |
+
+几个"踩过的坑"都写在对应文件的注释里，遇到看不懂的地方可以搜关键字：
+`Loaded 早于 SourceInitialized`、`白底白字`、`ClickHandled`、`ABM_REMOVE`、`防回环`。
+
+---
+
+## 4. 目录结构
 
 ```
 MiniBar.sln
@@ -70,16 +94,17 @@ MiniBar.sln
 │   ├─ Services/               面板与迷你模式编排、主题、单实例、日志
 │   ├─ UI/                     任务栏窗口、浮层、迷你窗口、通知、浮窗、插件管理器、主题
 │   └─ ViewModels/
-└─ plugins/                    4 个示例插件，同时也是开发范例
+└─ plugins/                    5 个示例插件，同时也是开发范例
     ├─ MiniBar.Plugin.Clock          全部 7 种能力都用到（含 4 时区面板）
     ├─ MiniBar.Plugin.SystemMonitor  零依赖读 Win32 采样 CPU/内存，演示徽标刷新
     ├─ MiniBar.Plugin.QuickNotes     面板里放文本框，自动落盘；认领 .txt/.md 拖放
-    └─ MiniBar.Plugin.QuickLaunch    只靠菜单/热键/拖放工作，演示"没有图标也能存在"
+    ├─ MiniBar.Plugin.QuickLaunch    只靠菜单/热键/拖放工作，演示"没有图标也能存在"
+    └─ MiniBar.Plugin.SedentaryReminder  久坐提醒：注释最详细的一个，适合照着写自己的插件
 ```
 
 ---
 
-## 4. 架构
+## 5. 架构
 
 ```
 ┌────────────────────────────── MiniBar.exe (宿主) ──────────────────────────────┐
@@ -119,7 +144,7 @@ MiniBar.sln
 
 ---
 
-## 5. 插件开发
+## 6. 插件开发
 
 只要三步：建一个 `net8.0-windows` 类库 → 引用 `MiniBar.Sdk`（`Private="false"`）→ 写一个类。
 
@@ -157,7 +182,7 @@ public sealed class FirstPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelConte
 
 ---
 
-## 6. 低内存设计（实测）
+## 7. 低内存设计（实测）
 
 | 措施 | 效果 |
 | --- | --- |
@@ -181,7 +206,7 @@ public sealed class FirstPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelConte
 
 ---
 
-## 7. 交互速查
+## 8. 交互速查
 
 | 操作 | 行为 |
 | --- | --- |
@@ -193,6 +218,7 @@ public sealed class FirstPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelConte
 | 拖入文件/文件夹 | 图标上 → 该插件优先；空白处 → 按安装顺序询问所有拖放插件；DLL → 直接热加载 |
 | `Ctrl+Alt+M` | 进入 / 退出迷你模式（全屏时也会自动进入） |
 | `Ctrl+Alt+,` | 打开设置窗口（宿主设置 + 所有插件的设置） |
+| `Ctrl+Alt+B` | 打开 / 关闭久坐提醒面板（示例插件注册的） |
 | `Ctrl+Alt+H` | 显示 / 隐藏任务栏 |
 | `Ctrl+Alt+P` | 打开插件管理器 |
 | `Ctrl+Alt+T` / `Ctrl+Alt+N` | 示例插件注册的快捷键（时钟 / 便签） |
@@ -200,7 +226,7 @@ public sealed class FirstPlugin : IMinibarPlugin, ITaskButtonPlugin, IPanelConte
 
 ---
 
-## 8. 已知边界
+## 9. 已知边界
 
 * **契约程序集不能随插件复制**（见 4.3）。插件目录里只应有插件自己的 DLL。
 * 插件只能引用 `MiniBar.Sdk`，引用宿主内部类型会在加载时抛异常（宿主内部类型均为 `internal`）。

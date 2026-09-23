@@ -80,11 +80,39 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
 
     public string? Tooltip => ShowSeconds ? "含秒的当前时间" : "当前时间";
 
-    public void OnClick(BarItemClickContext context) => context.TogglePanel();
+    public void OnClick(BarItemClickContext context)
+    {
+        // 只有"左键单击"才由插件接管面板开关；中键/双击的语义留给宿主，避免两边各切一次。
+        // （context.TogglePanel() 会把 context.ClickHandled 置为 true，宿主便不再重复切换）
+        if (context.Kind == BarItemActivationKind.Primary)
+        {
+            context.TogglePanel();
+        }
+    }
 
     // ---------------------------------------------------------------- 任务栏内嵌内容
 
-    public double WidgetWidth => ShowSeconds ? 84 : 62;
+    /// <summary>
+    /// 内嵌内容的建议宽度（DIP）。返回 0 表示"由内容自己撑开"，宿主就不设固定宽度。
+    ///
+    /// 这里按**当前格式的实际文本**估算，而不是写死 84/62：
+    /// 写死宽度时，用户一旦把格式改成 "HH:mm:ss ddd"（例如 "23:22:02 周三"），
+    /// 文字就会超出这一格被切掉 —— 也就是"内容过多显示不全"。
+    /// </summary>
+    public double WidgetWidth => EstimateTextWidth(DateTime.Now.ToString(_barFormat)) + 20;
+
+    /// <summary>粗估一段文字的显示宽度：中日韩字符按 13.5 DIP、其余按 8.6 DIP 计，再留 6 DIP 余量。</summary>
+    private static double EstimateTextWidth(string text)
+    {
+        var width = 6d;
+
+        foreach (var ch in text)
+        {
+            width += ch >= 0x2E80 ? 13.5 : 8.6;
+        }
+
+        return Math.Ceiling(width);
+    }
 
     public FrameworkElement CreateBarWidget()
     {
@@ -96,6 +124,8 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
             // 等宽数字，秒跳动时不会左右晃
             FontFamily = new FontFamily("Consolas, Microsoft YaHei UI"),
             Foreground = Quote("ForegroundBrush"),
+            // 万一还是放不下（比如用户填了超长格式），退化成省略号而不是被硬切，悬停可看全
+            TextTrimming = TextTrimming.CharacterEllipsis,
             Tag = "Interactive",
         };
 
@@ -178,7 +208,9 @@ public sealed class ClockPlugin : IMinibarPlugin, ITaskButtonPlugin, IBarWidgetP
 
     public string CompactTitle => "时间";
 
-    public double PreferredCompactWidth => ShowSeconds ? 92 : 66;
+    // 紧凑内容固定用 HH:mm(:ss) 这样短的格式，所以宽度按"带不带秒"估一下就够了
+    public double PreferredCompactWidth =>
+        EstimateTextWidth(DateTime.Now.ToString(ShowSeconds ? "HH:mm:ss" : "HH:mm")) + 34;
 
     public double PreferredCompactHeight => 26;
 

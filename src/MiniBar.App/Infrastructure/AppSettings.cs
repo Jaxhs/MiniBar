@@ -41,6 +41,12 @@ public sealed class AppSettings
     /// <summary>AppBar 模式的厚度（DIP）。只有在 <see cref="UseAppBar"/> 为真时生效。</summary>
     public double AppBarThickness { get; set; } = 52;
 
+    /// <summary>
+    /// 打开系统任务栏（Windows 自带那条）的自动隐藏 —— 相当于替用户勾了
+    /// "任务栏设置 → 自动隐藏任务栏"。程序退出时会自动恢复用户原来的设置。
+    /// </summary>
+    public bool AutoHideSystemTaskbar { get; set; }
+
     public double BarOpacity { get; set; } = 0.94;
 
     public string Theme { get; set; } = "Light";

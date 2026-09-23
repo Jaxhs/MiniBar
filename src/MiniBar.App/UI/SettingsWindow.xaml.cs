@@ -250,12 +250,15 @@ public partial class SettingsWindow : Window
         {
             Text = $"{descriptor.DisplayName}  {descriptor.Version}",
             FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = $"{descriptor.DisplayName}  {descriptor.Version}",
         });
         info.Children.Add(new TextBlock
         {
             Text = $"{descriptor.Id} · {descriptor.StatusText} · {descriptor.CapabilityText}",
             FontSize = 11.5,
             TextWrapping = TextWrapping.Wrap,
+            ToolTip = $"{descriptor.Id}\n{descriptor.CapabilityText}",
             Foreground = Brush("MutedForegroundBrush"),
         });
         info.Children.Add(new TextBlock
@@ -331,6 +334,8 @@ public partial class SettingsWindow : Window
             Text = section.Title,
             FontWeight = FontWeights.SemiBold,
             VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            ToolTip = section.Title,
         });
 
         host.Children.Add(header);
@@ -372,7 +377,12 @@ public partial class SettingsWindow : Window
         if (item.Kind == PluginSettingKind.Info)
         {
             var block = new StackPanel { Margin = new Thickness(0, 3, 0, 3) };
-            block.Children.Add(new TextBlock { Text = item.Label, TextWrapping = TextWrapping.Wrap });
+            block.Children.Add(new TextBlock
+            {
+                Text = item.Label,
+                TextWrapping = TextWrapping.Wrap,
+                ToolTip = item.Label,
+            });
 
             if (!string.IsNullOrWhiteSpace(item.Description))
             {
@@ -398,7 +408,13 @@ public partial class SettingsWindow : Window
             Margin = new Thickness(0, 0, 14, 0),
         };
 
-        label.Children.Add(new TextBlock { Text = item.Label, TextWrapping = TextWrapping.Wrap });
+        // 标签可能被窄窗口挤到只剩几个字：用省略号收尾，悬停显示完整文字
+        label.Children.Add(new TextBlock
+        {
+            Text = item.Label,
+            TextWrapping = TextWrapping.Wrap,
+            ToolTip = item.Label,
+        });
 
         if (!string.IsNullOrWhiteSpace(item.Description))
         {

@@ -36,8 +36,11 @@
                     ToolTip="{Binding HoverText}"
                     ToolTipService.InitialShowDelay="450">
                 <Grid>
+                    <!-- 注意：这里**不要**加 Tag="Interactive"。
+                         加了的话，插件的整块自绘内容都会被当成"交互区域"，
+                         点击就不会再切换面板 —— 于是"时钟/久坐提醒这类带读数小控件的插件点不开"。
+                         插件若想让某个非控件元素吞掉点击，自己在那个元素上设 Tag="Interactive" 即可。 -->
                     <ContentControl x:Name="WidgetHost"
-                                    Tag="Interactive"
                                     Visibility="Collapsed"
                                     HorizontalContentAlignment="Stretch"
                                     VerticalContentAlignment="Center" />

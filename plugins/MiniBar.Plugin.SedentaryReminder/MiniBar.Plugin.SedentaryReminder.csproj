@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    这就是一个最普通的 .NET 类库工程。
+    目标框架 / WPF 开关都写在仓库根目录的 Directory.Build.props 里（net8.0-windows + UseWPF），
+    这里只需要声明"叫什么、编译到哪里去"。
+
+    · AssemblyName：编译出来的 DLL 名，也是插件管理器里显示的"文件"。
+    · OutDir      ：直接编译进宿主的插件目录，改完代码 build 一下宿主就能热加载，省去手工复制。
+    · Private=false（见下面 ProjectReference）：**契约程序集不能跟着插件一起复制**，
+      否则插件目录里会出现第二份 MiniBar.Sdk.dll，插件里的 IMinibarPlugin 与宿主里的
+      变成两个不同的类型，宿主判断"这是不是我的插件"会直接失败。
+  -->
+  <PropertyGroup>
+    <AssemblyName>MiniBar.Plugin.SedentaryReminder</AssemblyName>
+    <RootNamespace>MiniBar.Plugin.SedentaryReminder</RootNamespace>
+    <Version>1.0.0</Version>
+    <OutDir>..\..\src\MiniBar.App\bin\$(Configuration)\Plugins\</OutDir>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MiniBar.Sdk\MiniBar.Sdk.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

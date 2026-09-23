@@ -395,6 +395,18 @@ public sealed class ShellService : IShellService, IDisposable
 
     public bool IsPluginLoaded(string pluginId) => _plugins.Find(pluginId)?.IsLoaded ?? false;
 
+    public bool ReloadPlugin(string pluginId)
+    {
+        var descriptor = _plugins.Find(pluginId);
+        if (descriptor is null || descriptor.IsDuplicate)
+        {
+            return false;
+        }
+
+        _plugins.Reload(descriptor);
+        return true;
+    }
+
     public IReadOnlyList<PluginInfo> GetPlugins() => _plugins.GetPluginInfos();
 
     public void ShowMainMenu() => _bar?.ShowMainContextMenu();

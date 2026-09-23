@@ -74,6 +74,22 @@ internal sealed class PluginContext : IPluginContext, IDisposable
 
     public bool IsMiniMode => AppServices.Shell?.IsMiniMode ?? false;
 
+    /// <summary>用户空闲时长。宿主已经封装了 GetLastInputInfo，插件不用自己做 P/Invoke。</summary>
+    public TimeSpan UserIdleTime
+    {
+        get
+        {
+            try
+            {
+                return Interop.NativeMethods.GetIdleTime();
+            }
+            catch
+            {
+                return TimeSpan.Zero;
+            }
+        }
+    }
+
     public event EventHandler? ThemeChanged;
 
     public void InvalidateBarItem() => _host.InvalidateBarItem(_descriptor);

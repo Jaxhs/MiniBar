@@ -12,11 +12,35 @@ using MiniBar.Sdk;
 namespace MiniBar.App;
 
 /// <summary>
-/// 程序入口与生命周期协调。
+/// 程序入口与生命周期协调 —— <b>想读懂整个项目，建议从这里开始</b>。
 ///
-/// 启动顺序（有意为之）：
-///   配置 → 主题 → 快捷键管理器 → 插件宿主 → 能力门面 → 任务栏窗口 → 置顶守卫 → 全屏监视 → 异步扫描插件
-/// 这样窗口一出现就是可用的“空壳”，插件随后热插拔进来，不需要重启程序。
+/// <para><b>一、这个程序是什么</b></para>
+/// <para>
+/// 它是一个"空壳"：自己只提供一条任务栏（能占住屏幕边缘、能显示任意插件的内容），
+/// 所有具体功能都以 DLL 形式在运行时插进来。所以"程序主体"很小，
+/// 真正复杂的是<b>插件的加载/卸载</b>与<b>宿主对插件的服务</b>这两件事。
+/// </para>
+///
+/// <para><b>二、启动顺序（这个顺序是有原因的，不是随手排的）</b></para>
+/// <list type="number">
+///   <item><b>配置</b>（SettingsService）：后面所有东西都要读配置，所以必须最早；</item>
+///   <item><b>主题</b>（ThemeService）：窗口一显示就要用颜色，必须早于任何窗口；</item>
+///   <item><b>快捷键管理器</b>：它需要一个窗口才能注册系统热键，所以先建对象、后挂窗口；</item>
+///   <item><b>插件宿主</b>（PluginHost）：负责扫描/加载/卸载，但此时还<b>不</b>加载插件；</item>
+///   <item><b>能力门面</b>（ShellService）：插件要用到的"开面板、通知、热插拔"都由它提供；</item>
+///   <item><b>全屏监视器</b>：要早于任务栏窗口创建，这样窗口能在初始化时把自己登记进"忽略列表"，
+///         否则它自己会被当成全屏程序；</item>
+///   <item><b>任务栏窗口</b>（BarWindow）：窗口一 Show，用户就看到任务栏了（此时是空的）；</item>
+///   <item><b>置顶守卫 / 系统资源兜底</b>：注册退出清理钩子；</item>
+///   <item><b>异步扫描插件</b>：最后才开始读磁盘上的 DLL —— 界面已经出来了，加载慢也不影响观感。</item>
+/// </list>
+///
+/// <para><b>三、三条贯穿全项目的原则</b></para>
+/// <list type="bullet">
+///   <item><b>一切跨边界的东西都要走 MiniBar.Sdk</b>：宿主不认识插件类型，插件也不认识宿主类型；</item>
+///   <item><b>系统级资源必须成对释放</b>：AppBar 占位、热键、系统任务栏状态，都要在退出路径上还回去；</item>
+///   <item><b>低占用</b>：不引入第三方包、界面按需创建、空闲时把内存还给系统。</item>
+/// </list>
 /// </summary>
 public partial class App : Application
 {
@@ -28,7 +52,12 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        // 兜住 UI 线程上没被处理的异常：记日志 + 弹提示，而不是让程序直接崩掉
         DispatcherUnhandledException += OnDispatcherUnhandledException;
+
+        // 注意这里是"即发即忘"（_ =）：启动过程是异步的（要读磁盘扫插件），
+        // 但不能阻塞 WPF 的启动流程，否则窗口出不来。
         _ = StartAsync(e.Args);
     }
 
@@ -44,6 +73,10 @@ public partial class App : Application
             AppLog.Info($"程序目录：{AppPaths.BaseDirectory}");
 
             // 单实例：第二个实例只负责把路径转发进来
+            //
+            // "把文件拖到 exe 上"会启动一个新进程。如果直接开第二个任务栏，
+            // 屏幕上就会出现两条任务栏、注册两次 AppBar —— 所以这里用命名互斥体判断：
+            // 不是第一个实例就通过命名管道把参数发给已运行的实例，然后自己退出。
             _instance = new SingleInstanceCoordinator(OnExternalPathsReceived);
             if (!_instance.IsFirstInstance)
             {
@@ -86,9 +119,13 @@ public partial class App : Application
 
             // AppBar 占用的是系统级资源：必须保证任何退出路径都把它还给系统，
             // 否则一旦异常终止，用户桌面底部会永久空出一条（经验证 taskkill /F 就会这样）。
-            AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseAppBarQuietly();
-            AppDomain.CurrentDomain.UnhandledException += (_, _) => ReleaseAppBarQuietly();
-            SessionEnding += (_, _) => ReleaseAppBarQuietly();
+            // 系统任务栏的自动隐藏同理 —— 不恢复的话用户会"找不到任务栏"。
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => ReleaseSystemResources();
+            AppDomain.CurrentDomain.UnhandledException += (_, _) => ReleaseSystemResources();
+            SessionEnding += (_, _) => ReleaseSystemResources();
+
+            // 把"系统任务栏自动隐藏"同步给系统
+            ApplySystemTaskbarSetting();
 
             AppServices.Hotkeys.Attach(_bar);
             RegisterHostHotkeys();
@@ -111,6 +148,10 @@ public partial class App : Application
             StartIdleTrim();
 
             // 插件扫描与加载（异步，不阻塞窗口出现）
+            //
+            // 为什么要 await 又 ConfigureAwait(true)？
+            //   · await  ：后面的步骤（处理命令行路径、裁剪内存）要等插件都挂上才有意义；
+            //   · true   ：让后续代码回到 UI 线程继续跑 —— 插件实例化和界面操作都必须在 UI 线程上。
             await plugins.StartAsync().ConfigureAwait(true);
 
             var pinned = plugins.PinnedPlugins.Count();
@@ -351,8 +392,11 @@ public partial class App : Application
 
     // ---------------------------------------------------------------- 退出
 
-    /// <summary>把 AppBar 占用的屏幕空间还给系统（可被多次调用；异常一律吞掉）。</summary>
-    private static void ReleaseAppBarQuietly()
+    /// <summary>
+    /// 释放所有"系统级"资源：AppBar 占用的屏幕空间 + 被改动的系统任务栏状态。
+    /// 可被多次调用（幂等），异常一律吞掉 —— 退出路径上绝不能再抛。
+    /// </summary>
+    private static void ReleaseSystemResources()
     {
         try
         {
@@ -361,6 +405,39 @@ public partial class App : Application
         catch
         {
             // 退出路径上不允许再抛异常
+        }
+
+        try
+        {
+            // 没改过任务栏设置的话，Restore 什么都不做
+            Interop.SystemTaskbar.Restore();
+        }
+        catch
+        {
+            // 同上
+        }
+    }
+
+    /// <summary>
+    /// 把设置里的"系统任务栏自动隐藏"同步到系统：
+    /// 开 = 打开自动隐藏，关 = 恢复到程序启动前的状态。幂等，可以随便重复调用。
+    /// </summary>
+    public static void ApplySystemTaskbarSetting()
+    {
+        try
+        {
+            if (AppServices.Settings.Settings.AutoHideSystemTaskbar)
+            {
+                Interop.SystemTaskbar.SetAutoHide(true);
+            }
+            else
+            {
+                Interop.SystemTaskbar.Restore();
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn("切换系统任务栏自动隐藏失败", ex);
         }
     }
 
@@ -394,6 +471,9 @@ public partial class App : Application
         AppLog.Info("MiniBar 正在退出…");
 
         _idleTrimTimer?.Stop();
+
+        // 正常退出这条路径也要把系统级资源还回去（前面那几个钩子是给异常退出兜底的）
+        ReleaseSystemResources();
 
         try
         {

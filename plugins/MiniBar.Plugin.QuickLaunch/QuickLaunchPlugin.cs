@@ -70,7 +70,15 @@ public sealed class QuickLaunchPlugin : IMinibarPlugin, ITaskButtonPlugin, IPane
 
     public string? Badge => _shortcuts.Count > 0 ? _shortcuts.Count.ToString() : null;
 
-    public void OnClick(BarItemClickContext context) => context.TogglePanel();
+    public void OnClick(BarItemClickContext context)
+    {
+        // 左键单击 → 插件自己开关面板；其它键（中键/双击）由宿主按任务栏习惯处理。
+        // 想启动快捷项，用面板里的按钮或 Ctrl+Alt+1~5 全局快捷键。
+        if (context.Kind == BarItemActivationKind.Primary)
+        {
+            context.TogglePanel();
+        }
+    }
 
     // ---------------------------------------------------------------- 面板
 

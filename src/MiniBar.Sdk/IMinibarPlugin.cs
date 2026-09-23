@@ -49,6 +49,12 @@ public interface IPluginContext
     /// <summary>是否处于迷你模式（有其他程序全屏）。</summary>
     bool IsMiniMode { get; }
 
+    /// <summary>
+    /// 用户已经多久没有键鼠操作了（宿主调用 Win32 <c>GetLastInputInfo</c> 得到，开销极小）。
+    /// 典型用途：久坐提醒要区分"人在座位上"和"人离开了" —— 离开就不要计时，也不该弹提醒。
+    /// </summary>
+    TimeSpan UserIdleTime { get; }
+
     /// <summary>主题变化通知。</summary>
     event EventHandler? ThemeChanged;
 

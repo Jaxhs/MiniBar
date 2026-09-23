@@ -49,10 +49,10 @@ public partial class FlyoutWindow : Window
         _closingSelf = false;
 
         TitleText.Text = descriptor.Panel?.PanelTitle ?? descriptor.DisplayName;
+        TitleText.ToolTip = TitleText.Text; // 标题太长被省略号截断时，鼠标悬停能看全
         ContentHost.Content = content;
 
-        Width = Math.Clamp(descriptor.Panel?.PreferredWidth ?? 380, 220, 1400);
-        Height = Math.Clamp(descriptor.Panel?.PreferredHeight ?? 320, 140, 1000);
+        ApplySizeConstraints(descriptor);
 
         if (!IsVisible)
         {
@@ -62,6 +62,49 @@ public partial class FlyoutWindow : Window
         Reposition();
         Activate();
         AppServices.Topmost?.Tick();
+    }
+
+    /// <summary>
+    /// 计算浮层的尺寸约束。
+    ///
+    /// 宽度：插件声明 <c>PreferredWidth</c>，再用当前屏幕宽度兜底；
+    /// 高度：**不写死** —— 窗体是 <c>SizeToContent="Height"</c>，内容有多少就长多高，
+    ///       但 <c>MaxHeight</c> 顶到"屏幕可用高度 - 任务栏 - 间隙"，
+    ///       于是内容一多就出现滚动条，而不是被切掉看不见（这正是"插件内容过多显示不全"的修法）。
+    /// </summary>
+    private void ApplySizeConstraints(PluginDescriptor? descriptor)
+    {
+        var scale = DisplayService.GetScale(new WindowInteropHelper(this).Handle);
+        var work = ResolveDisplay().WorkArea;
+
+        // 工作区是物理像素，WPF 的 Width/Height/MaxHeight 是 DIP（逻辑像素），所以要除以缩放比
+        var maxWidthDip = Math.Max(240, (work.Width / scale) - 24);
+
+        // 任务栏自身的厚度 + 间隙 + 窗体投影留白，都从可用高度里扣掉
+        var barThickness = AppServices.Settings.Settings.UseAppBar
+            ? AppServices.Settings.Settings.AppBarThickness
+            : 60;
+
+        var maxHeightDip = Math.Max(200, (work.Height / scale) - barThickness - 48);
+
+        Width = Math.Clamp(descriptor?.Panel?.PreferredWidth ?? 380, 240, maxWidthDip);
+        MaxWidth = maxWidthDip;
+        MaxHeight = maxHeightDip;
+    }
+
+    /// <summary>浮层所在显示器：优先跟随任务栏，其次跟随设置里的显示器序号。</summary>
+    private DisplayInfo ResolveDisplay()
+    {
+        if (Bar is not null)
+        {
+            var barHwnd = new WindowInteropHelper(Bar).Handle;
+            if (DisplayService.FromWindow(barHwnd) is { } fromBar)
+            {
+                return fromBar;
+            }
+        }
+
+        return DisplayService.GetByIndex(_settings.Settings.MonitorIndex);
     }
 
     /// <summary>释放内容并隐藏（不销毁窗口，下次复用）。</summary>
@@ -117,10 +160,7 @@ public partial class FlyoutWindow : Window
         var heightPx = ActualHeight * scale;
 
         var anchor = Bar?.GetPixelRect() ?? Rect.Empty;
-        var display = anchor.IsEmpty
-            ? DisplayService.GetByIndex(_settings.Settings.MonitorIndex)
-            : DisplayService.FromWindow(Bar is null ? IntPtr.Zero : new WindowInteropHelper(Bar).Handle)
-              ?? DisplayService.GetByIndex(_settings.Settings.MonitorIndex);
+        var display = ResolveDisplay();
 
         var work = display.WorkArea;
         double left;
