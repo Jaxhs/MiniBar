@@ -2,6 +2,8 @@ using System.Windows;
 using System.Collections.Generic;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Interop;
+using MiniBar.App.Infrastructure;
 using MiniBar.App.Interop;
 using MiniBar.Sdk;
 
@@ -102,7 +104,46 @@ public static class MenuBuilder
         menu.Placement = PlacementMode.AbsolutePoint;
         menu.HorizontalOffset = x;
         menu.VerticalOffset = y;
+
+        ElevateToTopmost(menu);
+
         menu.IsOpen = true;
+    }
+
+    /// <summary>
+    /// 让菜单的浮层窗口也"置顶"。
+    ///
+    /// <para><b>为什么需要：</b>任务栏窗口自己是 <c>TOPMOST</c>（常驻最前），而 WPF 为菜单创建的
+    /// Popup 窗口默认<b>不是</b> TOPMOST。窗口层级里 TOPMOST 的一方永远压住非 TOPMOST 的一方，
+    /// 于是菜单紧贴任务栏弹出时，任务栏会盖在菜单上（实测：任务栏停右侧时，右键菜单的右半截
+    /// 直接被任务栏吃掉）。菜单的 Popup 是独立顶层窗口，用 <c>SetWindowPos</c> 把它也设成
+    /// TOPMOST 就解决了 —— 这就是"明明用了 ContextMenu 还是被遮住"的原因。</para>
+    ///
+    /// <para>必须在 <c>Opened</c> 之后才拿得到 <see cref="HwndSource"/>（打开前菜单还不在视觉树里），
+    /// 所以挂事件而不是打开前就设。</para>
+    /// </summary>
+    private static void ElevateToTopmost(ContextMenu menu)
+    {
+        menu.Opened += (_, _) =>
+        {
+            try
+            {
+                if (PresentationSource.FromVisual(menu) is HwndSource source && source.Handle != IntPtr.Zero)
+                {
+                    NativeMethods.SetWindowPos(
+                        source.Handle,
+                        NativeMethods.HWND_TOPMOST,
+                        0, 0, 0, 0,
+                        NativeMethods.SWP_NOMOVE | NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOACTIVATE);
+
+                    AppLog.Debug("菜单浮层已置顶");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn("把菜单浮层置顶失败", ex);
+            }
+        };
     }
 
     /// <summary>

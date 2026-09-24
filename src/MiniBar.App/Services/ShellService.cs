@@ -594,7 +594,15 @@ public sealed class ShellService : IShellService, IDisposable
 
     // ---------------------------------------------------------------- 菜单聚合
 
-    /// <summary>收集所有菜单插件在指定位置提供的菜单项。</summary>
+    /// <summary>
+    /// 收集菜单插件在指定位置提供的菜单项。
+    ///
+    /// <para><b>关键：指定了 <paramref name="targetPluginId"/> 就只问那一个插件。</b>
+    /// SDK 里给了 <c>PluginMenuContext.IsForSelf</c> 让插件自己判断"这条菜单是不是冲我来的"，
+    /// 但那是**约定**不是**强制** —— 只要有一个插件忘了判，它就会把自己的菜单项塞进
+    /// 别的插件的右键菜单里（实测："久坐提醒"的子菜单里出现了时钟、便签、系统监视的条目）。
+    /// 所以宿主在这里强制过滤：谁是目标就问谁，插件不判也不会串。</para>
+    /// </summary>
     public List<PluginMenuEntry> CollectMenuEntries(PluginMenuTarget target, string? targetPluginId,
         IReadOnlyList<string>? dropPaths = null)
     {
@@ -603,6 +611,13 @@ public sealed class ShellService : IShellService, IDisposable
         foreach (var descriptor in _plugins.GetEnabledPlugins())
         {
             if (!descriptor.IsLoaded || descriptor.Menu is not { } menu)
+            {
+                continue;
+            }
+
+            // 只问目标插件自己（targetPluginId 为空时表示"不限"，例如迷你窗口没绑定具体插件）
+            if (targetPluginId is not null &&
+                !string.Equals(descriptor.Id, targetPluginId, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }

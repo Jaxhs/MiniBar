@@ -24,10 +24,12 @@
 
         <!-- 任务栏上的一个“任务图标”。插件若提供 B 内嵌内容，则直接用内容替换图标区。 -->
         <DataTemplate x:Key="BarItemTemplate" DataType="{x:Type hosting:PluginDescriptor}">
+            <!-- Height 绑定 VM.ItemHeight：横排固定 38（整条任务栏等高）；
+                 竖排给 NaN = Auto —— 图标在上、文字在下的项约 62 高，写死 38 会把文字切掉。 -->
             <Border x:Name="ItemRoot"
                     MinWidth="38"
                     MaxWidth="320"
-                    Height="38"
+                    Height="{Binding DataContext.ItemHeight, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                     Margin="2,0"
                     CornerRadius="9"
                     Background="Transparent"

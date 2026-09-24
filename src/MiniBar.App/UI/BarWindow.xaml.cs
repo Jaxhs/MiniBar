@@ -363,9 +363,15 @@ public partial class BarWindow : Window
         // 并且给文字一个"厚度 - 留白"的宽度上限，超出的用省略号收尾。
         _vm.ItemAreaMargin = vertical ? new Thickness(0, 6, 0, 6) : new Thickness(9, 0, 9, 0);
         _vm.ItemLabelMargin = vertical ? new Thickness(0, 3, 0, 0) : new Thickness(6, 0, 2, 0);
+        // 标签宽度 = 厚度 - 18：扣掉外边距(3+3)、内边距(4+4)、任务项外边距(2+2) 之后正好是内容宽，
+        // 写大了会被裁剪/省略号，写小了文字会提前被截。
         _vm.ItemLabelMaxWidth = vertical
-            ? Math.Max(24, EffectiveAppBarThickness - 12)
+            ? Math.Max(24, EffectiveAppBarThickness - 18)
             : double.PositiveInfinity;
+
+        // 竖排下每项高度交给内容自己算（NaN = Auto）：有文字标签的项需要 ~62，
+        // 只有内嵌读数的项 38 就够。横排仍然钉死 38 保证整条任务栏等高。
+        _vm.ItemHeight = vertical ? double.NaN : 38;
 
         // 竖排时把每个任务项钉成"整条边的可用宽度"：
         // 68 - 左右外边距 6 - 内边距 8 = 54，正好是内容区宽度。
@@ -459,11 +465,16 @@ public partial class BarWindow : Window
         if (AppBar.IsRegistered)
         {
             // AppBar 模式：由 Shell 决定我们占哪一条（它会避开系统任务栏与其它 AppBar）
+            //
+            // 留白传 0：「距屏幕边缘留白」这个设置项的说明写的是"悬浮模式下的浮动间距"，
+            // 而这里传进去会被算成"条带厚度 + 留白"——设置 15 时整条边就从 68 变成 83 DIP，
+            // 任务栏凭空胖出一圈（实测 104px 而不是 85px）。占位模式下贴住边缘才对，
+            // 想要缝隙由 ShellBorder.Margin(3~4) 提供。
             var granted = AppBar.SetPosition(
                 settings.Edge,
                 display.Bounds,
                 EffectiveAppBarThickness * scale,
-                settings.Margin * scale);
+                0);
 
             _lastAppBarSet = Environment.TickCount64;
             if (granted is { Width: > 0, Height: > 0 })

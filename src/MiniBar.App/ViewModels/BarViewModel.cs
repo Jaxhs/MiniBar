@@ -20,6 +20,7 @@ public sealed class BarViewModel : ObservableObject
     private Thickness _itemLabelMargin = new(6, 0, 2, 0);
     private double _itemLabelMaxWidth = double.PositiveInfinity;
     private double _itemWidth = double.NaN;
+    private double _itemHeight = 38;
     private bool _showLabels;
     private bool _hasOverflow;
     private bool _isEmpty = true;
@@ -131,6 +132,21 @@ public sealed class BarViewModel : ObservableObject
     {
         get => _itemWidth;
         set => SetProperty(ref _itemWidth, value);
+    }
+
+    /// <summary>
+    /// 每个任务项的高度（DIP）。
+    ///
+    /// <para>横排给 38：任务栏是一条横带，所有图标必须等高。</para>
+    /// <para>竖排给 <see cref="double.NaN"/>（= Auto，由内容决定）：竖排时图标在上、文字在下，
+    /// 图标 26 + 文字 21 + 边距 ≈ 62，写死 38 会把文字的下半截切掉
+    /// （用户反馈的"带文字的显示不全"就是这个）；而带内嵌读数的项只需要 38 高，
+    /// 统一钉死要么切文字、要么给读数项留一大块空白，所以干脆让每项自己撑开。</para>
+    /// </summary>
+    public double ItemHeight
+    {
+        get => _itemHeight;
+        set => SetProperty(ref _itemHeight, value);
     }
 
 
