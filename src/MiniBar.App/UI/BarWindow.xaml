@@ -30,7 +30,7 @@
                     MinWidth="38"
                     MaxWidth="320"
                     Height="{Binding DataContext.ItemHeight, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                    Margin="2,0"
+                    Margin="{Binding DataContext.ItemMargin, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
                     CornerRadius="9"
                     Background="Transparent"
                     Cursor="Hand"

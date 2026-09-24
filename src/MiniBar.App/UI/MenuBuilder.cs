@@ -5,6 +5,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Interop;
 using MiniBar.App.Infrastructure;
 using MiniBar.App.Interop;
+using MiniBar.App.Services;
 using MiniBar.Sdk;
 
 namespace MiniBar.App.UI;
@@ -124,8 +125,14 @@ public static class MenuBuilder
     /// </summary>
     private static void ElevateToTopmost(ContextMenu menu)
     {
+        // 菜单打开期间暂停"周期重申置顶"：重申会把任务栏重新提到 TOPMOST 组最前面，
+        // 于是刚置顶的菜单又被压下去（实测 3 秒一次，4.8 秒后 z 序就翻过来了）。
+        IDisposable? suspension = null;
+
         menu.Opened += (_, _) =>
         {
+            suspension = AppServices.Topmost?.Suspend();
+
             try
             {
                 if (PresentationSource.FromVisual(menu) is HwndSource source && source.Handle != IntPtr.Zero)
@@ -143,6 +150,13 @@ public static class MenuBuilder
             {
                 AppLog.Warn("把菜单浮层置顶失败", ex);
             }
+        };
+
+        menu.Closed += (_, _) =>
+        {
+            // 恢复重申并立刻重申一次，任务栏马上回到最前
+            suspension?.Dispose();
+            suspension = null;
         };
     }
 

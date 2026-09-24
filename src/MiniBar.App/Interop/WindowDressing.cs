@@ -147,12 +147,70 @@ public sealed class TopmostGuard : IDisposable
 
     public void Tick()
     {
-        if (!_enabled || !_window.IsVisible || _window.Visibility != Visibility.Visible)
+        if (!_enabled || _suspendCount > 0 || !_window.IsVisible || _window.Visibility != Visibility.Visible)
         {
             return;
         }
 
         WindowDressingService.BringToTop(_window, true);
+    }
+
+    // ---------------------------------------------------------------- 暂停（菜单打开期间）
+
+    private int _suspendCount;
+
+    /// <summary>当前是否处于"暂停重申"状态（右键菜单打开期间为真）。</summary>
+    public bool IsSuspended => _suspendCount > 0;
+
+    /// <summary>
+    /// 暂停"周期性重申置顶"，返回的令牌 <c>Dispose</c> 后自动恢复。
+    ///
+    /// <para><b>为什么必须能暂停：</b>重申置顶用的是 <c>SetWindowPos(HWND_TOPMOST)</c>，
+    /// 而"把一个窗口再设一次 TOPMOST"会把<b>它挪到 TOPMOST 组的最前面</b>。
+    /// 菜单的浮层也是 TOPMOST（我们刚把它提上去），于是每过 <c>TopmostGuardIntervalMs</c>
+    /// 任务栏就被重新提到菜单上面 —— 实测：菜单刚弹出时 z 序是「菜单 &gt; 任务栏」，
+    /// 4.8 秒（跨过一次重申）后变成「任务栏 &gt; 菜单」，也就是用户看到的"菜单还是被遮住"。</para>
+    ///
+    /// <para>用计数而不是布尔：可能同时挂着多个浮层（子菜单、通知气泡）。</para>
+    /// </summary>
+    public IDisposable Suspend()
+    {
+        _suspendCount++;
+        return new Suspension(this);
+    }
+
+    private void Resume()
+    {
+        if (_suspendCount > 0)
+        {
+            _suspendCount--;
+        }
+
+        if (_suspendCount == 0)
+        {
+            // 立刻重申一次，让任务栏回到最前（否则要等下一个计时间隔）
+            Tick();
+        }
+    }
+
+    /// <summary>暂停令牌：Dispose 即恢复（可安全重复 Dispose）。</summary>
+    private sealed class Suspension : IDisposable
+    {
+        private readonly TopmostGuard _owner;
+        private bool _disposed;
+
+        public Suspension(TopmostGuard owner) => _owner = owner;
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _owner.Resume();
+        }
     }
 
     public void Dispose() => _timer.Stop();

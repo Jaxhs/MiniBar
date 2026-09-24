@@ -17,6 +17,7 @@ public sealed class BarViewModel : ObservableObject
 {
     private Orientation _itemsOrientation = Orientation.Horizontal;
     private Thickness _itemAreaMargin = new(9, 0, 9, 0);
+    private Thickness _itemMargin = new(2, 0, 2, 0);
     private Thickness _itemLabelMargin = new(6, 0, 2, 0);
     private double _itemLabelMaxWidth = double.PositiveInfinity;
     private double _itemWidth = double.NaN;
@@ -63,6 +64,20 @@ public sealed class BarViewModel : ObservableObject
     {
         get => _itemAreaMargin;
         set => SetProperty(ref _itemAreaMargin, value);
+    }
+
+    /// <summary>
+    /// 整块任务项的外边距，跟随方向。
+    ///
+    /// <para>横排 (2,0)：左右各留 2 把相邻图标分开，上下留 0 让图标撑满任务栏高度。</para>
+    /// <para>竖排 (2,6)：<b>上下必须留白</b> —— 竖排时任务项是一个个上下摞起来的，
+    /// 上下边距为 0 的话四项会糊成一团（用户反馈的"内容太过紧凑"）。
+    /// 左右仍留 2，配合 ItemWidth 保证内容不会贴到边。</para>
+    /// </summary>
+    public Thickness ItemMargin
+    {
+        get => _itemMargin;
+        set => SetProperty(ref _itemMargin, value);
     }
 
     /// <summary>文字标签的外边距，同样跟随方向（竖排时改为上下留白）。</summary>

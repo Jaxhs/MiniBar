@@ -373,6 +373,10 @@ public partial class BarWindow : Window
         // 只有内嵌读数的项 38 就够。横排仍然钉死 38 保证整条任务栏等高。
         _vm.ItemHeight = vertical ? double.NaN : 38;
 
+        // 任务项外边距也跟随方向：竖排时任务项是上下摞起来的，上下不留白会糊成一团
+        // （用户反馈的"左右两侧时内容太过紧凑"）。横排保持 (2,0) 让图标撑满任务栏高度。
+        _vm.ItemMargin = vertical ? new Thickness(2, 6, 2, 6) : new Thickness(2, 0, 2, 0);
+
         // 竖排时把每个任务项钉成"整条边的可用宽度"：
         // 68 - 左右外边距 6 - 内边距 8 = 54，正好是内容区宽度。
         // 横排保持 NaN = 由内容撑开。
